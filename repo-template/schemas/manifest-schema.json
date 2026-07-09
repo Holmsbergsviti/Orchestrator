@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.com/manifest-schema.json",
+  "title": "Orchestrator Manifest",
+  "type": "object",
+  "required": ["version", "programs"],
+  "properties": {
+    "version": { "type": "string" },
+    "lastUpdated": { "type": "string", "format": "date-time" },
+    "description": { "type": "string" },
+    "targetMachines": {
+      "oneOf": [
+        { "type": "string", "enum": ["all"] },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "programs": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/program" }
+    }
+  },
+  "definitions": {
+    "program": {
+      "type": "object",
+      "required": ["id", "name", "version", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "version": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "deleted"] },
+        "type": { "type": "string", "enum": ["exe", "batch", "powershell", "vbs", "python"] },
+        "url": { "type": "string", "format": "uri" },
+        "path": { "type": "string" },
+        "checksum": { "type": "string", "pattern": "^(sha256:)?[A-Fa-f0-9]{64}$" },
+        "installPath": { "type": "string" },
+        "fileName": { "type": "string" },
+        "arguments": { "type": "string" },
+        "runAtStartup": { "type": "boolean" },
+        "runAsAdmin": { "type": "boolean" },
+        "runOnce": { "type": "boolean" },
+        "deletedDate": { "type": "string" },
+        "reason": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "active" } } },
+          "then": {
+            "required": ["type", "installPath", "fileName"],
+            "anyOf": [
+              { "required": ["url"] },
+              { "required": ["path"] }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

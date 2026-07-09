@@ -1,0 +1,67 @@
+{
+  "version": "1.0",
+  "lastUpdated": "2026-07-08T10:30:00Z",
+  "description": "Sample orchestration manifest",
+  "targetMachines": "all",
+  "programs": [
+    {
+      "id": "backup-tool-001",
+      "name": "backup-tool",
+      "description": "Daily backup automation utility",
+      "version": "1.1",
+      "status": "active",
+      "type": "exe",
+      "path": "programs/backup-tool/v1.1/backup.exe",
+      "checksum": "sha256:REPLACE_WITH_REAL_SHA256",
+      "installPath": "C:\\Orchestrator\\programs\\backup-tool",
+      "fileName": "backup.exe",
+      "arguments": "--start-minimized",
+      "runAtStartup": true,
+      "runAsAdmin": false,
+      "runOnce": false,
+      "metadata": {
+        "author": "IT Team",
+        "purpose": "Daily backup of critical files"
+      }
+    },
+    {
+      "id": "monitor-001",
+      "name": "monitoring-service",
+      "description": "System monitoring and reporting",
+      "version": "1.0",
+      "status": "active",
+      "type": "powershell",
+      "url": "https://raw.githubusercontent.com/YOUR_USER/orchestrator-repo/main/programs/monitoring-service/v1.0/monitor.ps1",
+      "checksum": "sha256:REPLACE_WITH_REAL_SHA256",
+      "installPath": "C:\\Orchestrator\\programs\\monitoring",
+      "fileName": "monitor.ps1",
+      "runAtStartup": true,
+      "runAsAdmin": true,
+      "runOnce": false
+    },
+    {
+      "id": "sync-tool-001",
+      "name": "system-sync",
+      "version": "2.0",
+      "status": "active",
+      "type": "batch",
+      "path": "programs/system-sync/v2.0/sync.bat",
+      "checksum": "sha256:REPLACE_WITH_REAL_SHA256",
+      "installPath": "C:\\Orchestrator\\programs\\sync",
+      "fileName": "sync.bat",
+      "arguments": "full-sync",
+      "runAtStartup": true,
+      "runAsAdmin": false,
+      "runOnce": false
+    },
+    {
+      "id": "old-tool-001",
+      "name": "deprecated-tool",
+      "version": "1.5",
+      "status": "deleted",
+      "installPath": "C:\\Orchestrator\\programs\\old-tool",
+      "deletedDate": "2026-07-01T00:00:00Z",
+      "reason": "Replaced by new-tool, no longer needed"
+    }
+  ]
+}

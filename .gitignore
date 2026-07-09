@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+publish/
+scripts/publish/
+*.user
+
+# Local machine state (never commit)
+config.json
+cache/
+logs/
+
+# IDE
+.vs/
+.idea/
+*.suo
+
+# Secrets — never commit tokens
+appsettings.Local.json
+appsettings.*.Local.json
