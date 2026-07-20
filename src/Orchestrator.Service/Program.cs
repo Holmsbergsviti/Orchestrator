@@ -55,6 +55,8 @@ try
     builder.Services.AddSingleton<IChecksumService, ChecksumService>();
     builder.Services.AddSingleton<IGitHubClient, GitHubClient>();
     builder.Services.AddSingleton<IRegistryService, RegistryService>();
+    builder.Services.AddSingleton<IScheduledTaskService, ScheduledTaskService>();
+    builder.Services.AddSingleton<IStartupManager, StartupManager>();
     builder.Services.AddSingleton<IManifestService, ManifestService>();
     builder.Services.AddSingleton<ISyncService, SyncService>();
     builder.Services.AddHostedService<Worker>();

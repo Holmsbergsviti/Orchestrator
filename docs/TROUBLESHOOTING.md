@@ -31,18 +31,27 @@ The `path`/`url` in the manifest doesn't resolve.
   or raise `SyncIntervalMinutes`.
 
 ## Program not launching at boot
-- Confirm the Run entry exists:
+Startup registration depends on `runAsAdmin`:
+- **`runAsAdmin: false`** → an `HKLM\...\Run` value. Confirm it exists:
   ```powershell
   Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" | Select Orch_*
   ```
-- `HKLM\...\Run` runs at **user logon**, not service start. Headless/no-login boxes won't
-  fire it — for those, run the program from a script the service launches, or use Task
-  Scheduler.
-- The entry runs in the logged-in user's context, not SYSTEM.
+  Run entries fire at **user logon** in that user's non-elevated context — headless/no-login
+  boxes won't run them. Use `runAsAdmin: true` for those.
+- **`runAsAdmin: true`** → a Scheduled Task running as SYSTEM with highest privilege, at boot.
+  Confirm it exists:
+  ```powershell
+  schtasks /Query /TN Orch_my-app /V /FO LIST
+  ```
+  This fires at boot even with no user logged in.
 
 ## A deleted program didn't get removed
-- The `deleted` entry must stay in the manifest long enough for the machine to sync it.
+- Prefer `status: deleted`; it must stay in the manifest long enough for the machine to
+  sync it once. (Removing the entry outright also uninstalls, using the last-known local
+  `installPath`, but leaves no `reason` in the logs.)
 - Deletion keys off `installPath`; make sure it matches what was installed.
+- Cleanup removes both startup mechanisms (Run value and Scheduled Task), so a program that
+  had `runAsAdmin` toggled still gets fully unregistered.
 
 ## Force an immediate sync
 ```powershell

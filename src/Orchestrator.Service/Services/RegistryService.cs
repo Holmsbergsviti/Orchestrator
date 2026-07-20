@@ -34,7 +34,7 @@ public sealed class RegistryService : IRegistryService
 
     public void RegisterStartup(ProgramEntry program)
     {
-        var command = BuildLaunchCommand(program);
+        var command = LaunchCommandBuilder.BuildRunKeyValue(program);
         using var key = Registry.LocalMachine.CreateSubKey(_config.StartupRegistryKey, writable: true)
             ?? throw new InvalidOperationException($"Cannot open registry key {_config.StartupRegistryKey}");
         key.SetValue(EntryName(program), command, RegistryValueKind.String);
@@ -52,29 +52,4 @@ public sealed class RegistryService : IRegistryService
             _log.LogInformation("Removed startup entry {Name}", name);
         }
     }
-
-    /// <summary>Build the command line written to the Run key, per program type.</summary>
-    private static string BuildLaunchCommand(ProgramEntry program)
-    {
-        var file = program.FullFilePath;
-        var args = program.Arguments ?? string.Empty;
-
-        return program.Type switch
-        {
-            ProgramType.PowerShell =>
-                $"\"{PowerShellPath}\" -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File \"{file}\" {args}".Trim(),
-            ProgramType.Python =>
-                $"pythonw \"{file}\" {args}".Trim(),
-            ProgramType.Batch =>
-                $"cmd.exe /c \"{file}\" {args}".Trim(),
-            ProgramType.Vbs =>
-                $"wscript.exe \"{file}\" {args}".Trim(),
-            _ /* Exe */ =>
-                $"\"{file}\" {args}".Trim()
-        };
-    }
-
-    private static string PowerShellPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "WindowsPowerShell", "v1.0", "powershell.exe");
 }

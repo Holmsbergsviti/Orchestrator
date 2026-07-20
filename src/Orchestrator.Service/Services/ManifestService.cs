@@ -121,6 +121,25 @@ public sealed class ManifestService : IManifestService
                 });
         }
 
+        // Deletions: programs that vanished from the manifest entirely. If an admin
+        // deletes an entry outright (rather than flipping it to status=deleted), we
+        // still uninstall it, using the last-known local entry which carries the
+        // installPath/name/type needed to clean up files and startup registration.
+        var remoteIds = remote.Programs
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var prev in localById.Values)
+        {
+            if (prev.Status != ProgramStatus.Active) continue;   // already handled or never installed
+            if (remoteIds.Contains(prev.Id)) continue;           // still present in remote (any status)
+            plan.Actions.Add(new SyncAction
+            {
+                Type = SyncActionType.Delete,
+                Program = prev,
+                PreviousVersion = prev.Version
+            });
+        }
+
         return plan;
     }
 

@@ -10,9 +10,9 @@
     <OutputType>Exe</OutputType>
 
     <!-- Single-file self-contained publish so target machines need no .NET runtime.
-         Publish with: dotnet publish -c Release -r win-x64 -->
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>true</SelfContained>
+         RID and self-contained are passed at publish time by scripts/publish.ps1
+         (dotnet publish -c Release -r win-x64) so a plain build / test project
+         reference produces an ordinary framework-dependent assembly. -->
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>

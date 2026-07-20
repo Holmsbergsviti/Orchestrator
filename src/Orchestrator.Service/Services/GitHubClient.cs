@@ -67,8 +67,21 @@ public sealed class GitHubClient : IGitHubClient
         return GetContentsRawAsync(path, ct);
     }
 
-    /// <summary>Resolve the repo-relative path from an entry's path or raw URL.</summary>
+    /// <summary>Resolve the repo-relative path from an entry's path or raw URL, logging on failure.</summary>
     private string? ResolvePath(ProgramEntry program)
+    {
+        var path = ResolveRepoPath(program);
+        if (path is null && string.IsNullOrWhiteSpace(program.Path))
+            _log.LogWarning("Could not parse repo path from url '{Url}' for {Name}", program.Url, program.Name);
+        return path;
+    }
+
+    /// <summary>
+    /// Pure resolution of a program's repo-relative path: prefer an explicit <c>path</c>,
+    /// otherwise parse a <c>raw.githubusercontent.com/{owner}/{repo}/{branch}/{path...}</c>
+    /// URL, dropping the owner/repo/branch segments. Returns null if neither yields a path.
+    /// </summary>
+    public static string? ResolveRepoPath(ProgramEntry program)
     {
         if (!string.IsNullOrWhiteSpace(program.Path))
             return program.Path.TrimStart('/');
@@ -76,7 +89,6 @@ public sealed class GitHubClient : IGitHubClient
         if (string.IsNullOrWhiteSpace(program.Url))
             return null;
 
-        // Expected: https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path...}
         if (Uri.TryCreate(program.Url, UriKind.Absolute, out var uri) &&
             uri.Host.Contains("githubusercontent", StringComparison.OrdinalIgnoreCase))
         {
@@ -85,7 +97,6 @@ public sealed class GitHubClient : IGitHubClient
                 return string.Join('/', segs.Skip(3)); // drop owner/repo/branch
         }
 
-        _log.LogWarning("Could not parse repo path from url '{Url}' for {Name}", program.Url, program.Name);
         return null;
     }
 

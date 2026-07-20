@@ -49,17 +49,24 @@ the service parses the repo path out of it.
 Change its status and (optionally) note why:
 ```json
 { "id": "my-app-001", "name": "my-app", "version": "1.1", "status": "deleted",
-  "installPath": "C:\\Orchestrator\\programs\\my-app",
-  "reason": "retired" }
+   "installPath": "C:\\Orchestrator\\programs\\my-app",
+   "deletedDate": "2026-07-20T00:00:00Z",
+   "reason": "retired" }
 ```
-Next sync deletes the install folder and the `Orch_my-app` startup entry. Keep the entry in
-the manifest at least one cycle so every machine sees the `deleted` state.
+Next sync deletes the install folder and the `Orch_my-app` startup entry (Run value or
+Scheduled Task). Prefer `status: deleted` and keep the entry in the manifest at least one
+cycle so every machine sees the `deleted` state before you drop it entirely.
+
+Deleting the entry outright also works: a program that was installed and then disappears
+from the manifest completely is uninstalled on the next sync, using its last-known local
+`installPath`. The `status: deleted` route is still preferred because it's explicit and
+carries a `reason` into the logs.
 
 ## Field reference
 | Field | Required | Notes |
 |-------|----------|-------|
 | `id` | yes | Stable unique key; diffing is by `id`. |
-| `name` | yes | Used for the registry entry name. |
+| `name` | yes | Used for the startup entry name (`Orch_<name>` Run value or Scheduled Task). |
 | `version` | yes | Change it to trigger an update. |
 | `status` | yes | `active` or `deleted`. |
 | `type` | active | `exe` `batch` `powershell` `vbs` `python`. |
@@ -68,9 +75,11 @@ the manifest at least one cycle so every machine sees the `deleted` state.
 | `installPath` | active | Local dir; also used to locate files for deletion. |
 | `fileName` | active | File name written into `installPath`. |
 | `arguments` | no | Appended to the startup command. |
-| `runAtStartup` | no | Adds an `HKLM\...\Run` entry. |
-| `runAsAdmin` | no | Advisory (service already runs as SYSTEM). |
+| `runAtStartup` | no | Registers the program to launch at startup (mechanism depends on `runAsAdmin`). |
+| `runAsAdmin` | no | `false` → `HKLM\...\Run` entry (interactive user, non-elevated). `true` → Scheduled Task running as **SYSTEM** with highest privilege, at boot. |
 | `runOnce` | no | Executes once per machine right after install. |
+| `deletedDate` | deleted | Timestamp for `status: deleted` entries. |
+| `reason` | deleted | Brief explanation for the removal. |
 
 ## Startup command by type
 | type | Run entry written |

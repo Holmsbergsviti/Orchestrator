@@ -16,7 +16,7 @@ control-repo/
 ## Workflow
 1. Add a file under `programs/<name>/<version>/`.
 2. `gen-checksum.ps1 -Path <file>` → paste `sha256:...` into `manifest.json`.
-3. Set the entry `status: active` (or `deleted` to remove it everywhere).
+3. Set the entry `status: active` (or `deleted` to remove it everywhere). Deleted entries should also include `installPath`, `deletedDate`, and `reason`.
 4. Commit + push. Machines converge within one sync interval.
 
 See the orchestrator repo's [docs/ADDING-PROGRAMS.md](../docs/ADDING-PROGRAMS.md) for the

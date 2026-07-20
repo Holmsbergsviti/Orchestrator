@@ -19,7 +19,7 @@ public sealed class SyncService : ISyncService
     private readonly IGitHubClient _github;
     private readonly IManifestService _manifests;
     private readonly IChecksumService _checksums;
-    private readonly IRegistryService _registry;
+    private readonly IStartupManager _startup;
     private readonly IConfigService _configService;
     private readonly ILogger<SyncService> _log;
     private readonly OrchestratorConfig _config;
@@ -28,14 +28,14 @@ public sealed class SyncService : ISyncService
         IGitHubClient github,
         IManifestService manifests,
         IChecksumService checksums,
-        IRegistryService registry,
+        IStartupManager startup,
         IConfigService configService,
         ILogger<SyncService> log)
     {
         _github = github;
         _manifests = manifests;
         _checksums = checksums;
-        _registry = registry;
+        _startup = startup;
         _configService = configService;
         _config = configService.Config;
         _log = log;
@@ -167,8 +167,15 @@ public sealed class SyncService : ISyncService
 
         checksumCache[p.Id] = _checksums.ComputeSha256(bytes);
 
-        if (p.RunAtStartup && OperatingSystem.IsWindows())
-            _registry.RegisterStartup(p);
+        if (OperatingSystem.IsWindows())
+        {
+            // Register when startup is requested; otherwise clear any prior registration
+            // (handles a program that had runAtStartup flipped off in a later manifest).
+            if (p.RunAtStartup)
+                _startup.Register(p);
+            else
+                _startup.Remove(p);
+        }
 
         if (p.RunOnce)
             MaybeRunOnce(p);
@@ -180,7 +187,7 @@ public sealed class SyncService : ISyncService
             string.IsNullOrWhiteSpace(p.Reason) ? "" : $" ({p.Reason})");
 
         if (OperatingSystem.IsWindows())
-            _registry.RemoveStartup(p);
+            _startup.Remove(p);
 
         if (!string.IsNullOrWhiteSpace(p.InstallPath) && Directory.Exists(p.InstallPath))
         {
