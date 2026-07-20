@@ -49,20 +49,50 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 Write-Host "== Orchestrator bootstrap ==" -ForegroundColor Cyan
 Write-Host "Working dir: $work"
 
-# --- Ensure a .NET 8 SDK (installed locally, no machine-wide footprint) ---
-$dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
-$haveSdk8 = $false
-if ($dotnet) { try { $haveSdk8 = @(& $dotnet --list-sdks) -match '^8\.' } catch { } }
-if (-not $haveSdk8) {
-    Write-Host "Installing .NET 8 SDK (local to your profile)..."
-    $dotnetDir = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet-orch"
-    # DownloadString always returns text; Invoke-WebRequest.Content can return a
-    # byte[] on Windows PowerShell 5.1, which breaks [scriptblock]::Create.
-    $installText = (New-Object System.Net.WebClient).DownloadString('https://dot.net/v1/dotnet-install.ps1')
-    & ([scriptblock]::Create($installText)) -Channel 8.0 -InstallDir $dotnetDir -NoPath
-    $dotnet = Join-Path $dotnetDir "dotnet.exe"
+# --- Ensure a COMPLETE .NET 8 SDK ---
+# A version directory alone isn't enough: an interrupted install can leave the SDK
+# present to --list-sdks but missing the project SDKs (e.g. Microsoft.NET.Sdk.Worker),
+# which fails the build with MSB4236. Verify the Worker SDK is actually on disk.
+function Test-DotnetSdkComplete([string]$root) {
+    if (-not $root -or -not (Test-Path (Join-Path $root 'sdk'))) { return $false }
+    return [bool](Get-ChildItem (Join-Path $root 'sdk') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName 'Sdks\Microsoft.NET.Sdk.Worker') })
+}
+
+$dotnet = $null
+# Prefer a machine-wide dotnet if it already has a usable (complete) 8.x SDK.
+$sysDotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source
+if ($sysDotnet) {
+    $sysRoot = Split-Path $sysDotnet
+    if ((@(& $sysDotnet --list-sdks) -match '^8\.') -and (Test-DotnetSdkComplete $sysRoot)) {
+        $dotnet = $sysDotnet
+    }
+}
+if (-not $dotnet) {
+    $dotnetDir = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet-orch'
+    if ((Test-Path $dotnetDir) -and -not (Test-DotnetSdkComplete $dotnetDir)) {
+        Write-Host "Local SDK at $dotnetDir is incomplete; removing and reinstalling..."
+        Remove-Item -Recurse -Force $dotnetDir -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-DotnetSdkComplete $dotnetDir)) {
+        Write-Host "Installing .NET 8 SDK (local to your profile)..."
+        # DownloadString always returns text; Invoke-WebRequest.Content can return a
+        # byte[] on Windows PowerShell 5.1, which breaks [scriptblock]::Create.
+        $installText = (New-Object System.Net.WebClient).DownloadString('https://dot.net/v1/dotnet-install.ps1')
+        & ([scriptblock]::Create($installText)) -Channel 8.0 -InstallDir $dotnetDir -NoPath
+    }
+    if (-not (Test-DotnetSdkComplete $dotnetDir)) {
+        throw "Could not install a complete .NET 8 SDK to $dotnetDir."
+    }
+    $dotnet = Join-Path $dotnetDir 'dotnet.exe'
 }
 Write-Host "Using dotnet: $dotnet"
+
+# Isolate the build from any machine-wide .NET state and first-run noise.
+$env:DOTNET_ROOT = Split-Path $dotnet
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_NOLOGO = '1'
 
 # --- Download source as a zip (no git required) ---
 Write-Host "Downloading source $CodeRepo@$CodeRef ..."
