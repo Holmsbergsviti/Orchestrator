@@ -1,9 +1,27 @@
 using System.Net.Http.Headers;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
 using Orchestrator.Service;
 using Orchestrator.Service.Models;
 using Orchestrator.Service.Services;
 using Serilog;
+
+// CLI verbs (self-installer). Handled before the host so the single exe can set
+// itself up as a service. On non-Windows these are skipped and the host runs.
+if (OperatingSystem.IsWindows())
+{
+    var verb = args.Length > 0 ? args[0].ToLowerInvariant() : null;
+    switch (verb)
+    {
+        case "install": return SelfInstaller.Install(args[1..]);
+        case "uninstall": return SelfInstaller.Uninstall(args[1..]);
+        case "help" or "-h" or "--help" or "/?": SelfInstaller.PrintUsage(); return 0;
+        // Double-clicked (interactive, not launched by the SCM): run the installer.
+        case null when Environment.UserInteractive && !WindowsServiceHelpers.IsWindowsService():
+            return SelfInstaller.Install(args);
+        // "run" or an SCM launch falls through to the host below.
+    }
+}
 
 // Bootstrap logger for early failures before the host is built.
 Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();
@@ -63,10 +81,12 @@ try
 
     var host = builder.Build();
     host.Run();
+    return 0;
 }
 catch (Exception ex)
 {
     Log.Fatal(ex, "Orchestrator terminated unexpectedly");
+    return 1;
 }
 finally
 {
