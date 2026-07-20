@@ -56,8 +56,10 @@ if ($dotnet) { try { $haveSdk8 = @(& $dotnet --list-sdks) -match '^8\.' } catch 
 if (-not $haveSdk8) {
     Write-Host "Installing .NET 8 SDK (local to your profile)..."
     $dotnetDir = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet-orch"
-    $install = [scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://dot.net/v1/dotnet-install.ps1).Content)
-    & $install -Channel 8.0 -InstallDir $dotnetDir -NoPath
+    # DownloadString always returns text; Invoke-WebRequest.Content can return a
+    # byte[] on Windows PowerShell 5.1, which breaks [scriptblock]::Create.
+    $installText = (New-Object System.Net.WebClient).DownloadString('https://dot.net/v1/dotnet-install.ps1')
+    & ([scriptblock]::Create($installText)) -Channel 8.0 -InstallDir $dotnetDir -NoPath
     $dotnet = Join-Path $dotnetDir "dotnet.exe"
 }
 Write-Host "Using dotnet: $dotnet"
