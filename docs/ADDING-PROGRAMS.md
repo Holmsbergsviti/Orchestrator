@@ -1,3 +1,8 @@
+<!--
+  FILE PURPOSE (in plain terms): The day-to-day reference for managing programs. It
+  shows how to add, update, and remove a program by editing manifest.json, and gives
+  a full field-by-field reference for what each manifest option means.
+-->
 # Adding, Updating & Removing Programs
 
 All changes are commits to your **control repo**. Orchestrators converge within one sync

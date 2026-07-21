@@ -1,38 +1,47 @@
-<Project Sdk="Microsoft.NET.Sdk.Worker">
+<!--
+====================================================================================
+ FILE PURPOSE (in plain terms):
+   The build recipe for the service. It tells the .NET compiler what kind of program
+   this is (a background "Worker" service targeting Windows and .NET 8), how to
+   package it (as one self-contained exe named orchestrator-service.exe), and which
+   third-party libraries it needs (hosting, HTTP, registry, Serilog logging).
+====================================================================================
+-->
+<Project Sdk="Microsoft.NET.Sdk.Worker">   <!-- use the "Worker Service" project type (a background service) -->
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <LangVersion>latest</LangVersion>
-    <RootNamespace>Orchestrator.Service</RootNamespace>
-    <AssemblyName>orchestrator-service</AssemblyName>
-    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>   <!-- build for .NET 8, Windows flavor -->
+    <Nullable>enable</Nullable>                          <!-- turn on null-safety warnings -->
+    <ImplicitUsings>enable</ImplicitUsings>             <!-- auto-import common namespaces so files need fewer usings -->
+    <LangVersion>latest</LangVersion>                    <!-- allow the newest C# language features -->
+    <RootNamespace>Orchestrator.Service</RootNamespace>  <!-- default namespace for the code -->
+    <AssemblyName>orchestrator-service</AssemblyName>    <!-- the output file is named orchestrator-service(.exe) -->
+    <OutputType>Exe</OutputType>                         <!-- produce an executable, not a library -->
 
     <!-- Single-file self-contained publish so target machines need no .NET runtime.
          RID and self-contained are passed at publish time by scripts/publish.ps1
          (dotnet publish -c Release -r win-x64) so a plain build / test project
          reference produces an ordinary framework-dependent assembly. -->
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <Version>1.0.0</Version>
-    <Product>GitHub Orchestrator Service</Product>
+    <PublishSingleFile>true</PublishSingleFile>                            <!-- bundle everything into one .exe -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>  <!-- include native bits inside that exe -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>   <!-- compress the bundle to keep the exe smaller -->
+    <Version>1.0.0</Version>                                              <!-- the product version -->
+    <Product>GitHub Orchestrator Service</Product>                       <!-- the product name shown in file properties -->
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
-    <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
-    <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />
-    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
-    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+  <ItemGroup>   <!-- the third-party libraries (NuGet packages) this project depends on -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />                  <!-- generic host / DI / config -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />  <!-- run as a Windows Service -->
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />                      <!-- IHttpClientFactory -->
+    <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />                       <!-- read/write the registry -->
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />                     <!-- Serilog logging integration -->
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />                             <!-- write logs to files -->
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />                          <!-- write logs to the console -->
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="appsettings.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    <None Update="appsettings.json">                                     <!-- treat appsettings.json as a copied file -->
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>      <!-- copy it next to the exe (only if newer) -->
     </None>
   </ItemGroup>
 

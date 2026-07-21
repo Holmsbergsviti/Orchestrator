@@ -1,3 +1,8 @@
+<!--
+  FILE PURPOSE (in plain terms): Explains the starter layout for YOUR private control
+  repo — the repo the service actually pulls from. It shows the expected folder
+  structure and the workflow for adding a program and committing it.
+-->
 # Control Repo (template)
 
 This is the layout for your **private** control repository — the single source of truth the

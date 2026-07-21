@@ -1,20 +1,26 @@
+# =====================================================================================
+# FILE PURPOSE (in plain terms):
+#   Tells Git which files/folders NOT to track. This keeps build output, machine-only
+#   state, editor junk, and — most importantly — secrets like tokens out of the repo.
+# =====================================================================================
+
 # Build output
-bin/
-obj/
-publish/
-scripts/publish/
-*.user
+bin/                        # compiled output (per-project)
+obj/                        # intermediate build files
+publish/                    # published self-contained exe output
+scripts/publish/            # publish output produced by scripts/publish.ps1
+*.user                      # per-user IDE project settings
 
 # Local machine state (never commit)
-config.json
-cache/
-logs/
+config.json                 # this machine's generated ID + run-once state
+cache/                      # remembered manifest + checksums
+logs/                       # log files
 
 # IDE
-.vs/
-.idea/
-*.suo
+.vs/                        # Visual Studio local folder
+.idea/                      # JetBrains Rider/IntelliJ local folder
+*.suo                       # Visual Studio solution user options
 
 # Secrets — never commit tokens
-appsettings.Local.json
-appsettings.*.Local.json
+appsettings.Local.json      # local overrides that may contain a token
+appsettings.*.Local.json    # any environment-specific local overrides

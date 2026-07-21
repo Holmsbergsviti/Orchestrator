@@ -1,3 +1,8 @@
+<!--
+  FILE PURPOSE (in plain terms): A step-by-step guide for getting the Orchestrator
+  running for the first time — building the service, preparing your control repo,
+  creating a GitHub token, installing on target machines, and verifying it works.
+-->
 # Setup Guide
 
 ## 0. Prerequisites

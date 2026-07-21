@@ -1,25 +1,33 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<!--
+====================================================================================
+ FILE PURPOSE (in plain terms):
+   The build recipe for the automated tests. It sets up an xUnit test project that
+   references the main service project, so the tests can exercise its pure logic
+   (planning, hashing, command/XML building) without needing a real Windows machine.
+====================================================================================
+-->
+<Project Sdk="Microsoft.NET.Sdk">   <!-- a standard (non-Worker) project type for the test assembly -->
 
   <PropertyGroup>
     <!-- Matches the service TFM so the project reference resolves. The tests here are
          pure-logic (diffing, hashing, string/XML builders) and run on any OS that can
          build net8.0-windows; they do not touch the registry or schtasks. -->
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <LangVersion>latest</LangVersion>
-    <IsPackable>false</IsPackable>
-    <IsPublishable>false</IsPublishable>
+    <TargetFramework>net8.0-windows</TargetFramework>   <!-- same target as the service so it can reference it -->
+    <Nullable>enable</Nullable>                          <!-- turn on null-safety warnings -->
+    <ImplicitUsings>enable</ImplicitUsings>             <!-- auto-import common namespaces -->
+    <LangVersion>latest</LangVersion>                    <!-- allow the newest C# features -->
+    <IsPackable>false</IsPackable>                       <!-- this project is not meant to be packaged/shipped -->
+    <IsPublishable>false</IsPublishable>                 <!-- and not meant to be published -->
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
-    <PackageReference Include="xunit" Version="2.9.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  <ItemGroup>   <!-- testing libraries -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />       <!-- the test host/runner infrastructure -->
+    <PackageReference Include="xunit" Version="2.9.2" />                          <!-- the xUnit test framework -->
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />      <!-- lets IDEs/VS run the tests -->
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Orchestrator.Service\Orchestrator.Service.csproj" />
+    <ProjectReference Include="..\..\src\Orchestrator.Service\Orchestrator.Service.csproj" />   <!-- reference the code under test -->
   </ItemGroup>
 
 </Project>

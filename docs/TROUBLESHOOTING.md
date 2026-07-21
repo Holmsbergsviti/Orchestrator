@@ -1,3 +1,8 @@
+<!--
+  FILE PURPOSE (in plain terms): A problem-solving guide. For each common symptom
+  (service won't start, checksum mismatch, 401/403, program not launching, etc.) it
+  explains the likely cause and the exact commands to diagnose and fix it.
+-->
 # Troubleshooting
 
 Logs: `C:\Orchestrator\logs\log-YYYY-MM-DD.txt` (one per day).

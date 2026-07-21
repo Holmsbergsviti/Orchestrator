@@ -1,3 +1,8 @@
+<!--
+  FILE PURPOSE (in plain terms): The front-page introduction to the whole project.
+  It explains what the Orchestrator does, how the two-repo design works, how to build
+  and install it, and how a sync cycle works. Start here if you're new to the repo.
+-->
 # GitHub-Based Windows Orchestrator
 
 A lightweight Windows service that syncs programs (`.exe`, `.bat`, `.ps1`, `.vbs`, `.py`)
