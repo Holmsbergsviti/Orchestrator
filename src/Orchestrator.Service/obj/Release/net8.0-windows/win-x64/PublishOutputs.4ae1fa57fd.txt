@@ -1,3 +1,0 @@
-/Users/vsalii/Documents/GitHub/Orchestrator/scripts/publish/appsettings.json
-/Users/vsalii/Documents/GitHub/Orchestrator/scripts/publish/orchestrator-service.pdb
-/Users/vsalii/Documents/GitHub/Orchestrator/scripts/publish/orchestrator-service.exe
