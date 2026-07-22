@@ -78,13 +78,13 @@ default branch/interval, etc.) live in **one file at the repo root: [`defaults.j
 Edit a value there and it flows everywhere:
 
 - the **C# service** embeds `defaults.json` at build time and reads it via `OrchestratorDefaults.cs`
-  (so rebuild after changing it), and
-- the **PowerShell scripts** read it at runtime.
+  (so rebuild after changing it),
+- the **PowerShell scripts** read it at runtime, and
+- the exe's **`<AssemblyName>`** in the csproj is derived from `exeName` at build time, so even
+  renaming the exe is a one-place change.
 
-The one value that can't be auto-derived is `<AssemblyName>` in
-`src/Orchestrator.Service/Orchestrator.Service.csproj`, which must be kept equal to
-`defaults.json`'s `exeName` by hand. The per-machine `appsettings.json` written at install
-time still wins at runtime; `defaults.json` supplies the defaults behind it.
+The per-machine `appsettings.json` written at install time still wins at runtime;
+`defaults.json` supplies the defaults behind it.
 
 ## Configuration (`appsettings.json`)
 

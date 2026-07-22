@@ -15,8 +15,17 @@
     <ImplicitUsings>enable</ImplicitUsings>             <!-- auto-import common namespaces so files need fewer usings -->
     <LangVersion>latest</LangVersion>                    <!-- allow the newest C# language features -->
     <RootNamespace>Orchestrator.Service</RootNamespace>  <!-- default namespace for the code -->
-    <AssemblyName>orchestrator-service</AssemblyName>    <!-- the output file is named orchestrator-service(.exe) -->
     <OutputType>Exe</OutputType>                         <!-- produce an executable, not a library -->
+
+    <!-- Derive the exe/assembly name from defaults.json's "exeName" so that file stays the
+         SINGLE source of truth (no hand-editing AssemblyName). At build time we read the
+         JSON text, regex out the exeName value, and strip the .exe (MSBuild re-adds it).
+         If defaults.json can't be read for any reason, we fall back to the literal. -->
+    <_OrchDefaultsFile>$(MSBuildThisFileDirectory)../../defaults.json</_OrchDefaultsFile>  <!-- repo-root defaults.json -->
+    <_OrchExeName Condition="Exists('$(_OrchDefaultsFile)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_OrchDefaultsFile)')), '(?&lt;="exeName"\s*:\s*")[^"]*').Value)</_OrchExeName>  <!-- pull "exeName" out of the JSON -->
+    <_OrchExeName Condition="'$(_OrchExeName)' == ''">orchestrator-service.exe</_OrchExeName>  <!-- fallback if the file/regex yields nothing -->
+    <AssemblyName>$([System.IO.Path]::GetFileNameWithoutExtension('$(_OrchExeName)'))</AssemblyName>  <!-- output file name, minus .exe -->
+
 
     <!-- Single-file self-contained publish so target machines need no .NET runtime.
          RID and self-contained are passed at publish time by scripts/publish.ps1
@@ -48,9 +57,8 @@
   <ItemGroup>
     <!-- Bake the repo-root defaults.json (the single source of truth for names/paths)
          into the exe so OrchestratorDefaults.cs can read it at runtime. LogicalName
-         makes it resolvable simply as "defaults.json". NOTE: the <AssemblyName> above
-         must be kept equal to defaults.json's "exeName" value by hand — MSBuild can't
-         read the JSON at evaluation time. -->
+         makes it resolvable simply as "defaults.json". (The <AssemblyName> above is now
+         derived from this same file at build time, so there's nothing to keep in sync.) -->
     <EmbeddedResource Include="..\..\defaults.json">
       <LogicalName>defaults.json</LogicalName>
     </EmbeddedResource>
