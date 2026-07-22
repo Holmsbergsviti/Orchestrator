@@ -109,9 +109,12 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {   # service 
     sc.exe config $ServiceName binPath= "`"$exePath`"" start= auto | Out-Null  # just repoint it at the (new) exe and set auto-start
 } else {
     Write-Host "Creating service..."
-    New-Service -Name $ServiceName -BinaryPathName "`"$exePath`"" `           # otherwise create the service from scratch
-        -DisplayName $D.serviceDisplayName -StartupType Automatic `          # friendly name (from defaults.json) + auto-start at boot
-        -Description $D.serviceDescription | Out-Null                        # description (from defaults.json)
+    # Create the service from scratch. Display name + description come from defaults.json;
+    # StartupType Automatic makes it start at boot. (A line-continuation backtick must be
+    # the LAST character on its line, so these comments stay above the command, not inline.)
+    New-Service -Name $ServiceName -BinaryPathName "`"$exePath`"" `
+        -DisplayName $D.serviceDisplayName -StartupType Automatic `
+        -Description $D.serviceDescription | Out-Null
 }
 
 # Auto-restart on failure.
