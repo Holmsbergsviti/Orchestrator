@@ -45,4 +45,15 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Bake the repo-root defaults.json (the single source of truth for names/paths)
+         into the exe so OrchestratorDefaults.cs can read it at runtime. LogicalName
+         makes it resolvable simply as "defaults.json". NOTE: the <AssemblyName> above
+         must be kept equal to defaults.json's "exeName" value by hand — MSBuild can't
+         read the JSON at evaluation time. -->
+    <EmbeddedResource Include="..\..\defaults.json">
+      <LogicalName>defaults.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

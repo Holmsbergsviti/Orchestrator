@@ -41,7 +41,7 @@ try
     var builder = Host.CreateApplicationBuilder(args);  // start building the app host (DI container, config, etc.)
 
     // Run as a Windows Service when launched by the SCM; console when run interactively.
-    builder.Services.AddWindowsService(o => o.ServiceName = "GitHubOrchestrator");  // enables Windows-service behavior
+    builder.Services.AddWindowsService(o => o.ServiceName = OrchestratorDefaults.Instance.ServiceName);  // enables Windows-service behavior (name from defaults.json)
 
     builder.Services.Configure<OrchestratorConfig>(                                  // bind appsettings.json...
         builder.Configuration.GetSection(OrchestratorConfig.SectionName));           // ...the "Orchestrator" section -> OrchestratorConfig

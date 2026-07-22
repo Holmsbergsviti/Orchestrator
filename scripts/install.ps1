@@ -20,10 +20,11 @@
 .PARAMETER RepoOwner    GitHub user or org that owns the repo.
 .PARAMETER RepoName     Repository name.
 .PARAMETER Token        Personal Access Token (repo:read). Omit for public repos.
-.PARAMETER Branch       Branch to read (default: main).
-.PARAMETER IntervalMinutes  Sync interval (default: 60).
-.PARAMETER InstallRoot  Install directory (default: C:\Orchestrator).
+.PARAMETER Branch       Branch to read (blank = value from defaults.json).
+.PARAMETER IntervalMinutes  Sync interval (0 = value from defaults.json).
+.PARAMETER InstallRoot  Install directory (blank = value from defaults.json).
 .PARAMETER SourceDir    Folder holding published binaries (default: .\publish).
+.PARAMETER DefaultsPath Path to defaults.json; used when the script is piped in remotely.
 
 .EXAMPLE
     .\install.ps1 -RepoOwner acme -RepoName orchestrator-repo -Token ghp_xxx
@@ -33,15 +34,29 @@ param(
     [Parameter(Mandatory)] [string]$RepoOwner,                  # GitHub owner of the control repo (required)
     [Parameter(Mandatory)] [string]$RepoName,                   # control repo name (required)
     [string]$Token = "",                                        # access token; blank means the repo is public
-    [string]$Branch = "main",                                   # branch of the control repo to read
-    [int]$IntervalMinutes = 60,                                  # how often the service checks GitHub, in minutes
-    [string]$InstallRoot = "C:\Orchestrator",                   # where to install everything
-    [string]$SourceDir = "$PSScriptRoot\publish"                # folder that holds the built exe to copy from
+    [string]$Branch = "",                                       # branch to read (blank -> filled from defaults.json)
+    [int]$IntervalMinutes = 0,                                   # sync interval in minutes (0 -> filled from defaults.json)
+    [string]$InstallRoot = "",                                  # install folder (blank -> filled from defaults.json)
+    [string]$SourceDir = "$PSScriptRoot\publish",               # folder that holds the built exe to copy from
+    [string]$DefaultsPath = ""                                  # override path to defaults.json (used when piped in remotely)
 )
 
 $ErrorActionPreference = "Stop"                                 # abort on the first error
-$ServiceName = "GitHubOrchestrator"                             # the Windows service's internal name
-$ExeName     = "orchestrator-service.exe"                       # the executable file name
+
+# --- Load shared defaults (single source of truth) -------------------------------
+# defaults.json lives at the repo root next to this scripts/ folder. Every fixed name
+# and path (service name, exe name, install root, etc.) is read from it, so you only
+# ever change those in one place. -DefaultsPath lets bootstrap.ps1 point us at a copy
+# it downloaded, since a piped-in script has no file of its own on disk.
+$defaultsFile = if ($DefaultsPath) { $DefaultsPath } else { Join-Path $PSScriptRoot "..\defaults.json" }  # where to read defaults from
+if (-not (Test-Path $defaultsFile)) { throw "defaults.json not found at '$defaultsFile'." }               # it must exist
+$D = Get-Content $defaultsFile -Raw | ConvertFrom-Json          # parse the shared defaults
+
+$ServiceName = $D.serviceName                                  # the Windows service's internal name (from defaults.json)
+$ExeName     = $D.exeName                                       # the executable file name (from defaults.json)
+if (-not $InstallRoot)     { $InstallRoot = $D.installRoot }    # fill install folder if the caller didn't set it
+if (-not $Branch)          { $Branch = $D.defaultBranch }       # fill branch if not set
+if (-not $IntervalMinutes) { $IntervalMinutes = [int]$D.defaultSyncIntervalMinutes }  # fill interval if not set
 
 # --- Elevation check ---
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())  # who is running this
@@ -76,11 +91,11 @@ $config = [ordered]@{
         RepoOwner           = $RepoOwner          # GitHub owner to read from
         RepoName            = $RepoName           # GitHub repo to read from
         Branch              = $Branch             # branch to read
-        ManifestPath        = "manifest.json"     # file in the repo that lists the programs
+        ManifestPath        = $D.manifestFileName # file in the repo that lists the programs (from defaults.json)
         GitHubToken         = $Token              # token for private repos (blank if public)
         SyncIntervalMinutes = $IntervalMinutes    # minutes between sync cycles
-        StartupRegistryKey  = "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"  # registry path for startup entries
-        RegistryEntryPrefix = "Orch_"             # prefix so our startup entries are easy to spot/clean up
+        StartupRegistryKey  = $D.registryRunKey   # registry path for startup entries (from defaults.json)
+        RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)
     }
 }
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $settings -Encoding UTF8  # turn it into JSON text and save it
@@ -95,8 +110,8 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {   # service 
 } else {
     Write-Host "Creating service..."
     New-Service -Name $ServiceName -BinaryPathName "`"$exePath`"" `           # otherwise create the service from scratch
-        -DisplayName "GitHub Orchestrator" -StartupType Automatic `          # friendly name + start automatically at boot
-        -Description "Syncs and manages programs from a GitHub manifest." | Out-Null
+        -DisplayName $D.serviceDisplayName -StartupType Automatic `          # friendly name (from defaults.json) + auto-start at boot
+        -Description $D.serviceDescription | Out-Null                        # description (from defaults.json)
 }
 
 # Auto-restart on failure.

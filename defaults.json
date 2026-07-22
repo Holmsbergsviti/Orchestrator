@@ -1,0 +1,15 @@
+{
+  "_README": "SINGLE SOURCE OF TRUTH for the project's fixed names and paths. Edit the values here and they flow everywhere: the C# service embeds this file at build time (see OrchestratorDefaults.cs) and the PowerShell scripts read it at runtime. Keep it valid JSON — no // comments, escape backslashes as \\\\. The one value that can't be auto-derived from here is the exe's assembly name in Orchestrator.Service.csproj (<AssemblyName>), which must match 'exeName' below.",
+  "installRoot": "C:\\Windows\\Orch",
+  "serviceName": "GitHubOrchestrator",
+  "serviceDisplayName": "GitHub Orchestrator",
+  "serviceDescription": "Syncs and manages programs from a GitHub manifest.",
+  "exeName": "orchestrator-service.exe",
+  "registryRunKey": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+  "registryEntryPrefix": "Orch_",
+  "manifestFileName": "manifest.json",
+  "defaultBranch": "main",
+  "defaultSyncIntervalMinutes": 60,
+  "codeRepo": "Holmsbergsviti/Orchestrator",
+  "codeRef": "main"
+}

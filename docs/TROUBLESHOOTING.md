@@ -5,15 +5,15 @@
 -->
 # Troubleshooting
 
-Logs: `C:\Orchestrator\logs\log-YYYY-MM-DD.txt` (one per day).
-Structured history: `C:\Orchestrator\logs\sync-history.json`.
-Last-applied manifest: `C:\Orchestrator\cache\local-manifest.json`.
+Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day).
+Structured history: `C:\Windows\Orch\logs\sync-history.json`.
+Last-applied manifest: `C:\Windows\Orch\cache\local-manifest.json`.
 
 ## Service won't start
 ```powershell
 Get-Service GitHubOrchestrator
 Get-EventLog -LogName Application -Source GitHubOrchestrator -Newest 20   # if present
-Get-Content C:\Orchestrator\logs\log-*.txt -Tail 50
+Get-Content C:\Windows\Orch\logs\log-*.txt -Tail 50
 ```
 - Bad `appsettings.json` (invalid JSON) → the host logs a fatal on startup. Fix and
   `Restart-Service GitHubOrchestrator`.
@@ -70,7 +70,7 @@ Restart-Service GitHubOrchestrator   # first cycle runs on start
 ## Reset local state (re-sync from scratch)
 ```powershell
 Stop-Service GitHubOrchestrator
-Remove-Item C:\Orchestrator\cache\*.json
+Remove-Item C:\Windows\Orch\cache\*.json
 Start-Service GitHubOrchestrator
 ```
 This re-installs every active program (checksums re-verified).

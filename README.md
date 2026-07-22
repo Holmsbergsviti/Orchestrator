@@ -66,16 +66,31 @@ Every cycle the service:
 3. Downloads new/changed files from GitHub, **verifies SHA256**, installs atomically.
 4. Registers `runAtStartup` programs under `HKLM\...\CurrentVersion\Run` (prefix `Orch_`).
 5. Removes any program marked `"status": "deleted"` — files and startup entry.
-6. Logs everything to `C:\Orchestrator\logs\log-YYYY-MM-DD.txt`.
+6. Logs everything to `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt`.
 
 See [docs/SETUP.md](docs/SETUP.md), [docs/ADDING-PROGRAMS.md](docs/ADDING-PROGRAMS.md),
 and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
+## Changing names & paths — `defaults.json`
+
+The fixed names and paths (install root, service name, exe name, registry key/prefix,
+default branch/interval, etc.) live in **one file at the repo root: [`defaults.json`](defaults.json)**.
+Edit a value there and it flows everywhere:
+
+- the **C# service** embeds `defaults.json` at build time and reads it via `OrchestratorDefaults.cs`
+  (so rebuild after changing it), and
+- the **PowerShell scripts** read it at runtime.
+
+The one value that can't be auto-derived is `<AssemblyName>` in
+`src/Orchestrator.Service/Orchestrator.Service.csproj`, which must be kept equal to
+`defaults.json`'s `exeName` by hand. The per-machine `appsettings.json` written at install
+time still wins at runtime; `defaults.json` supplies the defaults behind it.
+
 ## Configuration (`appsettings.json`)
 
-| Key | Meaning | Default |
+| Key | Meaning | Default (from `defaults.json`) |
 |-----|---------|---------|
-| `RootPath` | Install/data directory | `C:\Orchestrator` |
+| `RootPath` | Install/data directory | `C:\Windows\Orch` |
 | `RepoOwner` / `RepoName` | Control repo | — |
 | `Branch` | Branch to read | `main` |
 | `ManifestPath` | Manifest path in repo | `manifest.json` |

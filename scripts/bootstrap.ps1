@@ -26,9 +26,9 @@
 .PARAMETER RepoOwner   Owner of the CONTROL repo (manifest + programs).
 .PARAMETER RepoName    Name of the CONTROL repo.
 .PARAMETER Token       PAT with Contents:Read on the control repo (omit if public).
-.PARAMETER Branch      Control repo branch (default: main).
-.PARAMETER IntervalMinutes  Sync interval (default: 60; use 1 for testing).
-.PARAMETER InstallRoot Install directory (default: C:\Orchestrator).
+.PARAMETER Branch      Control repo branch (blank = value from defaults.json).
+.PARAMETER IntervalMinutes  Sync interval (0 = value from defaults.json; use 1 for testing).
+.PARAMETER InstallRoot Install directory (blank = value from defaults.json).
 .PARAMETER CodeRepo    Source repo hosting the exe + scripts (default: Holmsbergsviti/Orchestrator).
 .PARAMETER CodeRef     Branch of the source repo for scripts (default: main).
 .PARAMETER BuildFromSource  Build the exe locally instead of downloading it.
@@ -40,9 +40,9 @@ param(
     [Parameter(Mandatory)] [string]$RepoOwner,          # who owns the control repo (required)
     [Parameter(Mandatory)] [string]$RepoName,           # name of the control repo (required)
     [string]$Token = "",                                # access token for private repos (blank = public)
-    [string]$Branch = "main",                           # which branch of the control repo to read
-    [int]$IntervalMinutes = 60,                          # how often the service re-checks GitHub, in minutes
-    [string]$InstallRoot = "C:\Orchestrator",           # folder on disk where everything gets installed
+    [string]$Branch = "",                               # control-repo branch (blank -> filled from defaults.json)
+    [int]$IntervalMinutes = 0,                           # sync interval in minutes (0 -> filled from defaults.json)
+    [string]$InstallRoot = "",                          # install folder (blank -> filled from defaults.json)
     [string]$CodeRepo = "Holmsbergsviti/Orchestrator",  # repo that holds the exe + install scripts
     [string]$CodeRef = "main",                          # branch of that code repo to pull scripts from
     [switch]$BuildFromSource                             # if set, compile locally instead of downloading
@@ -65,10 +65,23 @@ $pub = Join-Path $work "publish"                                             # s
 New-Item -ItemType Directory -Force -Path $pub | Out-Null                    # create that folder (Out-Null hides the output)
 Write-Host "== Orchestrator bootstrap ==" -ForegroundColor Cyan             # print a banner so the user sees it started
 
+# --- Load shared defaults (single source of truth) -------------------------------
+# defaults.json lives at the repo root. Since this bootstrapper is usually piped in
+# from the web, we download that file first, read every fixed name/path from it, and
+# later hand its path to install.ps1 so it uses the same values. (CodeRepo/CodeRef
+# stay literal here -- they ARE the address this script fetches everything from.)
+$defaultsFile = Join-Path $work "defaults.json"                            # where to save the downloaded defaults.json
+(New-Object System.Net.WebClient).DownloadFile("https://raw.githubusercontent.com/$CodeRepo/$CodeRef/defaults.json", $defaultsFile)  # download it
+$D = Get-Content $defaultsFile -Raw | ConvertFrom-Json                     # parse the shared defaults
+$ExeName = $D.exeName                                                      # the executable file name (from defaults.json)
+if (-not $InstallRoot)     { $InstallRoot = $D.installRoot }               # fill install folder if the caller didn't set it
+if (-not $Branch)          { $Branch = $D.defaultBranch }                  # fill control-repo branch if not set
+if (-not $IntervalMinutes) { $IntervalMinutes = [int]$D.defaultSyncIntervalMinutes }  # fill interval if not set
+
 # Downloads the ready-made exe from the repo's 'dist' branch.
 function Get-Prebuilt {
-    $exeUrl = "https://raw.githubusercontent.com/$CodeRepo/dist/orchestrator-service.exe"  # web address of the prebuilt exe
-    $exePath = Join-Path $pub "orchestrator-service.exe"                                    # where to save it locally
+    $exeUrl = "https://raw.githubusercontent.com/$CodeRepo/dist/$ExeName"  # web address of the prebuilt exe (name from defaults.json)
+    $exePath = Join-Path $pub $ExeName                                     # where to save it locally
     Write-Host "Downloading prebuilt service exe..."
     (New-Object System.Net.WebClient).DownloadFile($exeUrl, $exePath)                       # do the actual download
     # Sanity check: if the file is missing or suspiciously small, treat it as a failed download.
@@ -142,6 +155,6 @@ $installText = (New-Object System.Net.WebClient).DownloadString("https://raw.git
 # Turn that text into a runnable block and call it, passing along all our settings + the freshly built/downloaded exe folder.
 & ([scriptblock]::Create($installText)) `
     -RepoOwner $RepoOwner -RepoName $RepoName -Token $Token -Branch $Branch `
-    -IntervalMinutes $IntervalMinutes -InstallRoot $InstallRoot -SourceDir $pub
+    -IntervalMinutes $IntervalMinutes -InstallRoot $InstallRoot -SourceDir $pub -DefaultsPath $defaultsFile
 
 Write-Host "Bootstrap complete. Logs: $InstallRoot\logs" -ForegroundColor Green  # final success message + where to find logs

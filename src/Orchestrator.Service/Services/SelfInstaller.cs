@@ -2,7 +2,7 @@
 // FILE PURPOSE (in plain terms):
 //   Lets the single exe install itself — no separate scripts needed. When you run
 //   "orchestrator-service.exe install" (or just double-click it), this code copies
-//   the exe into C:\Orchestrator, writes appsettings.json, locks the folder down, and
+//   the exe into C:\Windows\Orch, writes appsettings.json, locks the folder down, and
 //   registers + starts the Windows service. If you didn't pass the needed options it
 //   asks for them, and if you're not running as admin it re-launches itself elevated
 //   through a UAC prompt. "uninstall" does the reverse.
@@ -25,10 +25,11 @@ namespace Orchestrator.Service.Services;   // groups this with the other service
 [SupportedOSPlatform("windows")]   // Windows-only
 public static class SelfInstaller
 {
-    private const string ServiceName = "GitHubOrchestrator";        // the service's internal name
-    private const string DisplayName = "GitHub Orchestrator";       // the friendly name shown in Services
-    private const string ExeName = "orchestrator-service.exe";      // the executable file name
-    private const string RunKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";  // registry key for startup entries
+    private static readonly OrchestratorDefaults D = OrchestratorDefaults.Instance;   // the shared names/paths from defaults.json
+    private static readonly string ServiceName = D.ServiceName;         // the service's internal name (from defaults.json)
+    private static readonly string DisplayName = D.ServiceDisplayName;  // the friendly name shown in Services (from defaults.json)
+    private static readonly string ExeName = D.ExeName;                 // the executable file name (from defaults.json)
+    private static readonly string RunKey = D.RegistryRunKey;           // registry key for startup entries (from defaults.json)
 
     public static int Install(string[] opts)
     {
@@ -41,9 +42,9 @@ public static class SelfInstaller
             var owner = o.GetValueOrDefault("repoowner") ?? PromptRequired("GitHub owner (user or org)");   // repo owner (ask if missing)
             var repo = o.GetValueOrDefault("reponame") ?? PromptRequired("Control repo name");              // repo name (ask if missing)
             var token = o.GetValueOrDefault("token") ?? PromptSecret("Access token (leave blank for a public repo)");  // token (ask, hidden)
-            var branch = o.GetValueOrDefault("branch") ?? "main";                                           // branch (default main)
-            var root = o.GetValueOrDefault("installroot") ?? @"C:\Orchestrator";                            // install folder (default)
-            var interval = int.TryParse(o.GetValueOrDefault("intervalminutes"), out var iv) ? iv : 60;      // interval (default 60)
+            var branch = o.GetValueOrDefault("branch") ?? D.DefaultBranch;                                  // branch (from defaults.json)
+            var root = o.GetValueOrDefault("installroot") ?? D.InstallRoot;                                 // install folder (from defaults.json)
+            var interval = int.TryParse(o.GetValueOrDefault("intervalminutes"), out var iv) ? iv : D.DefaultSyncIntervalMinutes;  // interval (from defaults.json)
 
             Console.WriteLine($"\nInstalling to {root} (repo {owner}/{repo}@{branch}, every {interval} min)...");  // summary line
 
@@ -66,7 +67,7 @@ public static class SelfInstaller
                 Sc("config", ServiceName, "binPath=", bin, "start=", "auto");   // existing service -> repoint + auto-start
             else
                 Sc("create", ServiceName, "binPath=", bin, "start=", "auto", "DisplayName=", DisplayName);  // new service -> create it
-            Sc("description", ServiceName, "Syncs and manages programs from a GitHub manifest.");   // set the description
+            Sc("description", ServiceName, D.ServiceDescription);   // set the description (from defaults.json)
             Sc("failure", ServiceName, "reset=", "86400", "actions=", "restart/60000/restart/60000/restart/60000");  // auto-restart on crash
             Sc("start", ServiceName);                  // start the service now (first sync runs immediately)
 
@@ -91,7 +92,7 @@ public static class SelfInstaller
         try
         {
             var o = Parse(opts);   // parse the arguments
-            var root = o.GetValueOrDefault("installroot") ?? @"C:\Orchestrator";   // install folder (default)
+            var root = o.GetValueOrDefault("installroot") ?? D.InstallRoot;   // install folder (from defaults.json)
             var keepFiles = o.ContainsKey("keepfiles");        // -KeepFiles flag present?
             var keepStartup = o.ContainsKey("keepstartup");    // -KeepStartup flag present?
 
@@ -142,10 +143,10 @@ public static class SelfInstaller
               -Token     <pat>          Contents:Read PAT (omit for a public repo)
               -Branch    <name>         Control repo branch (default: main)
               -IntervalMinutes <n>      Sync interval (default: 60)
-              -InstallRoot <path>       Install directory (default: C:\Orchestrator)
+              -InstallRoot <path>       Install directory (default: C:\Windows\Orch)
 
             Uninstall options:
-              -InstallRoot <path>       Install directory (default: C:\Orchestrator)
+              -InstallRoot <path>       Install directory (default: C:\Windows\Orch)
               -KeepFiles                Leave files and logs on disk
               -KeepStartup              Leave Orch_* startup entries in place
 
@@ -165,11 +166,11 @@ public static class SelfInstaller
                 ["RepoOwner"] = owner,                   // GitHub owner
                 ["RepoName"] = repo,                     // GitHub repo
                 ["Branch"] = branch,                     // branch to read
-                ["ManifestPath"] = "manifest.json",      // manifest file name in the repo
+                ["ManifestPath"] = D.ManifestFileName,   // manifest file name in the repo (from defaults.json)
                 ["GitHubToken"] = token,                 // access token (blank if public)
                 ["SyncIntervalMinutes"] = interval,      // minutes between syncs
                 ["StartupRegistryKey"] = RunKey,         // registry key for startup entries
-                ["RegistryEntryPrefix"] = "Orch_"        // prefix for our entry names
+                ["RegistryEntryPrefix"] = D.RegistryEntryPrefix   // prefix for our entry names (from defaults.json)
             }
         };
         File.WriteAllText(Path.Combine(root, "appsettings.json"),   // save it as appsettings.json...
@@ -182,7 +183,7 @@ public static class SelfInstaller
         using (var key = Registry.LocalMachine.OpenSubKey(RunKey, writable: true))   // open the Run key
         {
             if (key is not null)
-                foreach (var name in key.GetValueNames().Where(n => n.StartsWith("Orch_", StringComparison.OrdinalIgnoreCase)))  // each Orch_* value
+                foreach (var name in key.GetValueNames().Where(n => n.StartsWith(D.RegistryEntryPrefix, StringComparison.OrdinalIgnoreCase)))  // each Orch_* value
                 {
                     Console.WriteLine($"Removing startup entry {name}");
                     key.DeleteValue(name, throwOnMissingValue: false);   // delete it
@@ -194,7 +195,7 @@ public static class SelfInstaller
         foreach (var line in csv.Split('\n'))   // walk each line...
         {
             var first = line.Split(',').FirstOrDefault()?.Trim().Trim('"').TrimStart('\\');   // the task name is the first CSV column
-            if (!string.IsNullOrEmpty(first) && first.StartsWith("Orch_", StringComparison.OrdinalIgnoreCase))   // ours?
+            if (!string.IsNullOrEmpty(first) && first.StartsWith(D.RegistryEntryPrefix, StringComparison.OrdinalIgnoreCase))   // ours?
             {
                 Console.WriteLine($"Removing scheduled task {first}");
                 Run("schtasks", "/Delete", "/TN", first, "/F");   // delete it

@@ -47,7 +47,7 @@ GitHub → Settings → Developer settings → Personal access tokens.
     -IntervalMinutes 60
 ```
 The installer:
-- copies binaries to `C:\Orchestrator`,
+- copies binaries to `C:\Windows\Orch`,
 - writes `appsettings.json` with your repo + token,
 - locks the folder to SYSTEM + Administrators,
 - creates the `GitHubOrchestrator` service (Automatic start, auto-restart on failure),
@@ -56,7 +56,7 @@ The installer:
 ## 5. Verify
 ```powershell
 Get-Service GitHubOrchestrator
-Get-Content C:\Orchestrator\logs\log-*.txt -Tail 40
+Get-Content C:\Windows\Orch\logs\log-*.txt -Tail 40
 ```
 
 ## Public repos

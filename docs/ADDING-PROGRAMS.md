@@ -27,7 +27,7 @@ interval (default 60 min).
      "type": "exe",
      "path": "programs/my-app/v1.0/my-app.exe",
      "checksum": "sha256:<hash>",
-     "installPath": "C:\\Orchestrator\\programs\\my-app",
+     "installPath": "C:\\Windows\\Orch\\programs\\my-app",
      "fileName": "my-app.exe",
      "arguments": "--silent",
      "runAtStartup": true,
@@ -54,7 +54,7 @@ the service parses the repo path out of it.
 Change its status and (optionally) note why:
 ```json
 { "id": "my-app-001", "name": "my-app", "version": "1.1", "status": "deleted",
-   "installPath": "C:\\Orchestrator\\programs\\my-app",
+   "installPath": "C:\\Windows\\Orch\\programs\\my-app",
    "deletedDate": "2026-07-20T00:00:00Z",
    "reason": "retired" }
 ```

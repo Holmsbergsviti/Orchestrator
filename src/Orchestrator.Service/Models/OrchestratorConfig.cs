@@ -20,8 +20,8 @@ public sealed class OrchestratorConfig
 {
     public const string SectionName = "Orchestrator";   // the appsettings.json section this maps to
 
-    /// <summary>Root install directory. Default C:\Orchestrator.</summary>
-    public string RootPath { get; set; } = @"C:\Orchestrator";   // base folder everything lives under
+    /// <summary>Root install directory. Default comes from defaults.json (C:\Windows\Orch).</summary>
+    public string RootPath { get; set; } = OrchestratorDefaults.Instance.InstallRoot;   // base folder everything lives under (from defaults.json)
 
     /// <summary>GitHub repository owner (user or org).</summary>
     public string RepoOwner { get; set; } = string.Empty;        // owner of the control repo
@@ -30,23 +30,23 @@ public sealed class OrchestratorConfig
     public string RepoName { get; set; } = string.Empty;         // name of the control repo
 
     /// <summary>Branch to read from.</summary>
-    public string Branch { get; set; } = "main";                 // which branch to read
+    public string Branch { get; set; } = OrchestratorDefaults.Instance.DefaultBranch;    // which branch to read (from defaults.json)
 
     /// <summary>Repo-relative path to the manifest.</summary>
-    public string ManifestPath { get; set; } = "manifest.json";  // where the manifest lives in the repo
+    public string ManifestPath { get; set; } = OrchestratorDefaults.Instance.ManifestFileName;  // where the manifest lives in the repo (from defaults.json)
 
     /// <summary>Personal Access Token with repo:read scope. Empty for public repos.</summary>
     public string GitHubToken { get; set; } = string.Empty;      // auth token; blank for public repos
 
     /// <summary>Minutes between sync cycles.</summary>
-    public int SyncIntervalMinutes { get; set; } = 60;           // how often to re-check GitHub
+    public int SyncIntervalMinutes { get; set; } = OrchestratorDefaults.Instance.DefaultSyncIntervalMinutes;  // how often to re-check GitHub (from defaults.json)
 
     /// <summary>Registry hive path for startup entries.</summary>
-    public string StartupRegistryKey { get; set; } =            // registry key used for startup registrations
-        @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+    public string StartupRegistryKey { get; set; } =            // registry key used for startup registrations (from defaults.json)
+        OrchestratorDefaults.Instance.RegistryRunKey;
 
     /// <summary>Prefix applied to registry entry names to namespace them.</summary>
-    public string RegistryEntryPrefix { get; set; } = "Orch_";   // name prefix so our entries are identifiable
+    public string RegistryEntryPrefix { get; set; } = OrchestratorDefaults.Instance.RegistryEntryPrefix;   // name prefix so our entries are identifiable (from defaults.json)
 
     [JsonIgnore] public string ProgramsPath => Path.Combine(RootPath, "programs");                    // <root>\programs — installed program files
     [JsonIgnore] public string LogsPath => Path.Combine(RootPath, "logs");                            // <root>\logs — log files

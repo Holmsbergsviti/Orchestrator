@@ -3,7 +3,7 @@
  FILE PURPOSE (in plain terms):
    The opposite of install.ps1. It cleanly tears the Orchestrator off a machine:
    stops and deletes the Windows Service, removes the "Orch_*" startup entries it
-   left in the registry, and deletes the C:\Orchestrator folder. Optional switches
+   left in the registry, and deletes the C:\Windows\Orch folder. Optional switches
    let you keep the files or the startup entries if you want a partial cleanup.
    Run from an Administrator PowerShell window.
 ====================================================================================
@@ -11,7 +11,7 @@
 .SYNOPSIS
     Stops and removes the GitHub Orchestrator Windows Service.
 
-.PARAMETER InstallRoot   Install directory (default: C:\Orchestrator).
+.PARAMETER InstallRoot   Install directory (blank = value from defaults.json).
 .PARAMETER KeepFiles     Leave files/logs on disk (default: remove them).
 .PARAMETER KeepStartup   Leave Orch_* registry startup entries (default: remove them).
 
@@ -20,13 +20,19 @@
 #>
 [CmdletBinding()]                                        # enable common parameters
 param(
-    [string]$InstallRoot = "C:\Orchestrator",           # folder to remove
+    [string]$InstallRoot = "",                          # folder to remove (blank -> filled from defaults.json)
     [switch]$KeepFiles,                                  # if set, leave the files/logs on disk
     [switch]$KeepStartup                                 # if set, leave the Orch_* startup entries alone
 )
 
 $ErrorActionPreference = "Stop"                         # stop on the first error
-$ServiceName = "GitHubOrchestrator"                     # the service's internal name
+
+# --- Load shared defaults (single source of truth) ---
+$defaultsFile = Join-Path $PSScriptRoot "..\defaults.json"   # repo-root defaults.json
+if (-not (Test-Path $defaultsFile)) { throw "defaults.json not found at '$defaultsFile'." }  # it must exist
+$D = Get-Content $defaultsFile -Raw | ConvertFrom-Json  # parse the shared defaults
+$ServiceName = $D.serviceName                           # the service's internal name (from defaults.json)
+if (-not $InstallRoot) { $InstallRoot = $D.installRoot } # fill install folder if the caller didn't pass one
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())  # who is running this
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {                          # not an admin?
@@ -44,8 +50,8 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {   # is the s
 }
 
 if (-not $KeepStartup) {                                                 # unless the user asked to keep them...
-    $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"      # the registry key holding startup entries
-    $props = (Get-Item $runKey).Property | Where-Object { $_ -like "Orch_*" }  # find only OUR entries (Orch_ prefix)
+    $runKey = "HKLM:\$($D.registryRunKey)"                              # the registry key holding startup entries (from defaults.json)
+    $props = (Get-Item $runKey).Property | Where-Object { $_ -like "$($D.registryEntryPrefix)*" }  # find only OUR entries (prefix from defaults.json)
     foreach ($p in $props) {                                             # for each one we created...
         Write-Host "Removing startup entry $p"
         Remove-ItemProperty -Path $runKey -Name $p -ErrorAction SilentlyContinue  # delete it
