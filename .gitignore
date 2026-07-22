@@ -2,25 +2,42 @@
 # FILE PURPOSE (in plain terms):
 #   Tells Git which files/folders NOT to track. This keeps build output, machine-only
 #   state, editor junk, and — most importantly — secrets like tokens out of the repo.
+#
+#   NOTE: Git does NOT support inline (end-of-line) comments in .gitignore. A comment
+#   must be on its own line starting with '#'. Anything after a pattern on the same
+#   line becomes part of the pattern, so keep comments above the patterns.
 # =====================================================================================
 
 # Build output
-bin/                        # compiled output (per-project)
-obj/                        # intermediate build files
-publish/                    # published self-contained exe output
-scripts/publish/            # publish output produced by scripts/publish.ps1
-*.user                      # per-user IDE project settings
+# compiled output (per-project)
+bin/
+# intermediate build files
+obj/
+# published self-contained exe output
+publish/
+# publish output produced by scripts/publish.ps1
+scripts/publish/
+# per-user IDE project settings
+*.user
 
 # Local machine state (never commit)
-config.json                 # this machine's generated ID + run-once state
-cache/                      # remembered manifest + checksums
-logs/                       # log files
+# this machine's generated ID + run-once state
+config.json
+# remembered manifest + checksums
+cache/
+# log files
+logs/
 
 # IDE
-.vs/                        # Visual Studio local folder
-.idea/                      # JetBrains Rider/IntelliJ local folder
-*.suo                       # Visual Studio solution user options
+# Visual Studio local folder
+.vs/
+# JetBrains Rider/IntelliJ local folder
+.idea/
+# Visual Studio solution user options
+*.suo
 
 # Secrets — never commit tokens
-appsettings.Local.json      # local overrides that may contain a token
-appsettings.*.Local.json    # any environment-specific local overrides
+# local overrides that may contain a token
+appsettings.Local.json
+# any environment-specific local overrides
+appsettings.*.Local.json
