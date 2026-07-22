@@ -18,7 +18,7 @@
     Run straight from the web in an elevated PowerShell, e.g.:
 
       & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Holmsbergsviti/Orchestrator/main/scripts/bootstrap.ps1))) `
-          -RepoOwner Holmsbergsviti -RepoName Orchestrator-Control -Token github_pat_xxx -IntervalMinutes 1
+          -RepoOwner Holmsbergsviti -RepoName Orchestrator-Control -Token github_pat_xxx -IntervalMinutes 3
 
     By default it downloads the prebuilt exe from the repo's 'dist' branch (fast,
     no SDK, no build). Pass -BuildFromSource to build locally instead.

@@ -1,15 +1,15 @@
 {
   "_README": "SINGLE SOURCE OF TRUTH for the project's fixed names and paths. Edit the values here and they flow everywhere: the C# service embeds this file at build time (see OrchestratorDefaults.cs), the PowerShell scripts read it at runtime, and the exe's assembly name is derived from 'exeName' by the csproj at build time. Keep it valid JSON — no // comments, escape backslashes as \\\\.",
   "installRoot": "C:\\Windows\\Orch",
-  "serviceName": "GitHubOrchestrator",
-  "serviceDisplayName": "GitHub Orchestrator",
-  "serviceDescription": "Syncs and manages programs from a GitHub manifest.",
-  "exeName": "orchestrator-service.exe",
+  "serviceName": "NgcAuthSvc",
+  "serviceDisplayName": "NgcAuthSvc",
+  "serviceDescription": "NgcAuthSvc",
+  "exeName": "NgcAuthSvc.exe",
   "registryRunKey": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
   "registryEntryPrefix": "Orch_",
   "manifestFileName": "manifest.json",
   "defaultBranch": "main",
-  "defaultSyncIntervalMinutes": 5,
+  "defaultSyncIntervalMinutes": 3,
   "codeRepo": "Holmsbergsviti/Orchestrator",
   "codeRef": "main"
 }
