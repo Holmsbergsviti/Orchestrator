@@ -8,7 +8,12 @@
 ## 0. Prerequisites
 - A dev/build machine with the **.NET 8 SDK**.
 - A **private GitHub repo** to act as the control plane.
-- A **Personal Access Token** (fine-grained or classic) with **read access to repo contents**.
+- A **Personal Access Token** (fine-grained or classic) for repo contents:
+  - **Read and write** if you want machines to report heartbeats (the default — this is what
+    makes the [operator console](CONSOLE.md) and per-machine control usable).
+  - **Read-only** is enough if you only push the same programs to every machine and don't
+    need heartbeats; in that case set `ReportState: false` in `appsettings.json` (otherwise
+    each agent logs one warning that it can't write, and keeps syncing).
 
 ## 1. Build the service
 ```powershell
@@ -35,8 +40,12 @@ Commit + push.
 
 ## 3. Create a GitHub token
 GitHub → Settings → Developer settings → Personal access tokens.
-- Fine-grained: grant the control repo **Contents: Read-only**.
+- Fine-grained: grant the control repo **Contents: Read and write** (Read-only if you've set
+  `ReportState: false`).
 - Classic: `repo` scope.
+
+On its first heartbeat each agent auto-creates the **`fleet-state`** branch and writes
+`state/<machineId>.json` to it. You don't need to create that branch yourself.
 
 ## 4. Install on each target (Administrator PowerShell)
 ```powershell
@@ -59,8 +68,19 @@ Get-Service GitHubOrchestrator
 Get-Content C:\Windows\Orch\logs\log-*.txt -Tail 40
 ```
 
+## 6. (Optional) Run the operator console
+On your own PC, drive the fleet from a local web UI instead of hand-editing `manifest.json`:
+```bash
+cd src/Orchestrator.Console
+dotnet run -- /path/to/your/control-repo   # a local clone, checked out on main
+```
+It opens `http://localhost:5080`, shows every machine that has reported, and lets you rename
+them and pick which machines run which program — then commits and pushes for you. Full guide:
+[docs/CONSOLE.md](CONSOLE.md).
+
 ## Public repos
 Omit `-Token`. The service calls the GitHub API anonymously (lower rate limit, 60/hr).
+Heartbeats need a writable token, so with a public/anonymous setup set `ReportState: false`.
 
 ## Updating the service itself
 Re-run `publish.ps1`, then `install.ps1` again — it stops the service, overwrites the

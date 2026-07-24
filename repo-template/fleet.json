@@ -1,0 +1,6 @@
+{
+  "_README": "Friendly names for your machines, shown in the operator console. The console writes this file for you (Machines panel), but you can hand-edit it too. Keys are machine ids (the GUID each agent generates, visible in its heartbeat under state/<machineId>.json on the fleet-state branch). This file is optional — without it machines just show by hostname.",
+  "labels": {
+    "00000000-0000-0000-0000-000000000000": "Example — Oleg's laptop"
+  }
+}

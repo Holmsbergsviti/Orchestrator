@@ -67,10 +67,27 @@ from the manifest completely is uninstalled on the next sync, using its last-kno
 `installPath`. The `status: deleted` route is still preferred because it's explicit and
 carries a `reason` into the logs.
 
+## Target specific machines
+By default every program installs on **every** machine. Add a `target` to scope it:
+```json
+"target": "all"                               // all machines (same as omitting the field)
+"target": "olegs-laptop"                       // one machine, by hostname
+"target": ["olegs-laptop", "DESKTOP-ABC123"]   // a set (hostnames and/or machine ids)
+```
+- Matching is **case-insensitive** against each machine's **hostname** *or* its **machine id**
+  (the GUID in that machine's `C:\Windows\Orch\config.json`, also shown in its heartbeat).
+- `"all"` anywhere in the list means everyone.
+- **Removal on un-target:** if a program was installed on a machine and you then retarget it
+  away (drop that machine from the list), the machine **uninstalls** it on the next sync —
+  files and startup entry — exactly as if it had been deleted there.
+- Editing this by hand is fine; the [operator console](CONSOLE.md) gives you a checkbox grid
+  and writes machine ids for you.
+
 ## Field reference
 | Field | Required | Notes |
 |-------|----------|-------|
 | `id` | yes | Stable unique key; diffing is by `id`. |
+| `target` | no | Machines this program runs on. Omit = all. String or array of hostnames/machine ids; `"all"` = everyone. |
 | `name` | yes | Used for the startup entry name (`Orch_<name>` Run value or Scheduled Task). |
 | `version` | yes | Change it to trigger an update. |
 | `status` | yes | `active` or `deleted`. |

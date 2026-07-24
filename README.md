@@ -8,9 +8,13 @@
 A lightweight Windows service that syncs programs (`.exe`, `.bat`, `.ps1`, `.vbs`, `.py`)
 from a central GitHub repository. It fetches a `manifest.json`, then installs, updates,
 and removes programs across a fleet of machines automatically. Delete a program from the
-manifest and it uninstalls everywhere on the next sync.
+manifest and it uninstalls everywhere on the next sync — or **`target` a program at
+specific machines** to control each PC individually.
 
-- **Zero infrastructure** — GitHub is the control plane.
+- **Zero infrastructure** — GitHub is the control plane (two-way: agents also report back).
+- **Per-machine control** — scope any program to specific machines by hostname or id.
+- **Operator console** — an optional local web UI to see the fleet and drive it, instead of
+  hand-editing JSON. See [docs/CONSOLE.md](docs/CONSOLE.md).
 - **Self-contained** — publishes to a single `.exe`, no .NET runtime needed on targets.
 - **Verified** — every download checked against a SHA256 in the manifest.
 - **Silent** — runs as a SYSTEM Windows Service, no UI.
@@ -20,22 +24,24 @@ manifest and it uninstalls everywhere on the next sync.
 ```
 Orchestrator/
 ├─ Orchestrator.sln
-├─ src/Orchestrator.Service/       # the service (C# / .NET 8)
-│  ├─ Models/                      # Manifest, ProgramEntry, config, plan
-│  ├─ Services/                    # GitHub, checksum, registry, manifest, sync
+├─ src/Orchestrator.Service/       # the agent — a Windows service (C# / .NET 8)
+│  ├─ Models/                      # Manifest, ProgramEntry, Heartbeat, config, plan
+│  ├─ Services/                    # GitHub, checksum, registry, manifest, sync, fleet reporter
 │  ├─ Program.cs / Worker.cs       # host + background loop
 │  └─ appsettings.json             # default config (overwritten at install)
+├─ src/Orchestrator.Console/       # the operator console — a local web UI (cross-platform)
 ├─ scripts/                        # publish / install / uninstall / checksum
 ├─ repo-template/                  # what YOUR control repo should look like
-│  ├─ manifest.json
+│  ├─ manifest.json  fleet.json
 │  └─ schemas/manifest-schema.json
-└─ docs/                           # SETUP, ADDING-PROGRAMS, TROUBLESHOOTING
+└─ docs/                           # SETUP, ADDING-PROGRAMS, CONSOLE, TROUBLESHOOTING
 ```
 
 There are **two repos** in this design:
-1. **This repo** — the orchestrator service source code.
-2. **Your control repo** (private) — holds `manifest.json` + the `/programs` files.
-   Start it from [`repo-template/`](repo-template/).
+1. **This repo** — the orchestrator agent + console source code.
+2. **Your control repo** (private) — holds `manifest.json`, `fleet.json`, and the
+   `/programs` files on `main`; the agents also auto-create a `fleet-state` branch and
+   commit their heartbeats there. Start it from [`repo-template/`](repo-template/).
 
 ## Quick start
 
@@ -71,6 +77,34 @@ Every cycle the service:
 See [docs/SETUP.md](docs/SETUP.md), [docs/ADDING-PROGRAMS.md](docs/ADDING-PROGRAMS.md),
 and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
+## Controlling each machine individually
+
+By default every machine runs every `active` program. Add a `target` to a program to scope
+it — omit it (or `"all"`) for everyone:
+```json
+"target": "olegs-laptop"                       // by hostname
+"target": ["olegs-laptop", "DESKTOP-ABC123"]   // a set (hostname and/or machine id)
+```
+Matching is case-insensitive against each machine's **hostname or machine id**. Retarget a
+program away from a machine and it **uninstalls** there on the next sync. Full details in
+[docs/ADDING-PROGRAMS.md](docs/ADDING-PROGRAMS.md#target-specific-machines).
+
+## Two-way: heartbeats & the operator console
+
+Each agent reports back by committing `state/<machineId>.json` to a dedicated **`fleet-state`**
+branch (auto-created, kept off `main`): hostname, OS, agent version, last-seen, last sync
+result, and what it's running. To avoid noise it commits only when something meaningful
+changes, or every few hours to refresh "last seen".
+
+The **operator console** ([docs/CONSOLE.md](docs/CONSOLE.md)) is a local web UI you run on
+your own PC. It reads the manifest + heartbeats from a local clone, shows your fleet by
+friendly name with a program-vs-machine checkbox grid, and commits/pushes your changes back:
+```bash
+cd src/Orchestrator.Console && dotnet run -- /path/to/control-repo
+```
+Heartbeats and the console need the agent token to have **write** access. With a read-only
+token, set `ReportState: false` — the agent logs one warning and keeps syncing normally.
+
 ## Changing names & paths — `defaults.json`
 
 The fixed names and paths (install root, service name, exe name, registry key/prefix,
@@ -94,21 +128,26 @@ The per-machine `appsettings.json` written at install time still wins at runtime
 | `RepoOwner` / `RepoName` | Control repo | — |
 | `Branch` | Branch to read | `main` |
 | `ManifestPath` | Manifest path in repo | `manifest.json` |
-| `GitHubToken` | PAT with `repo:read` (empty = public) | `""` |
+| `GitHubToken` | PAT — `repo` write for heartbeats, read for sync-only (empty = public) | `""` |
 | `SyncIntervalMinutes` | Minutes between cycles | `60` |
 | `RegistryEntryPrefix` | Namespaces Run entries | `Orch_` |
+| `ReportState` | Commit a heartbeat to `fleet-state` (needs a writable token) | `true` |
+| `FleetStateBranch` | Branch heartbeats are committed to | `fleet-state` |
+| `HeartbeatMaxIntervalMinutes` | Force a heartbeat at least this often | `360` |
 
 ## Uninstall
 ```powershell
 .\scripts\uninstall.ps1        # stops + deletes service, removes files + Orch_* startup keys
 ```
 
-## Notes & limits (Phase 1)
-- Windows-only (Registry + service host). Build/run the Windows-specific paths on Windows.
+## Notes & limits
+- The **agent** is Windows-only (Registry + service host). The **console** is cross-platform
+  (net8.0) — run it on Windows, macOS, or Linux.
 - Runs as **SYSTEM** — programs launched at startup inherit high privilege.
-- All machines get all `active` programs (per-machine targeting is Phase 2 — MachineID is
-  already generated and stored in `config.json` for it).
+- Per-machine targeting is implemented (`target`); a machine must report **one heartbeat**
+  before the console can target it individually (write token + `ReportState: true`).
 - Rollback = revert the manifest commit; the next sync converges to it.
+- The console needs `git` on your PATH and a local clone whose `push` is already authenticated.
 
 ## Requirements
 - Targets: Windows 10/11 or Server 2016+ (Win7 SP1+ in theory).
