@@ -24,7 +24,8 @@ internal static class TestData   // static helper (no instances needed)
         bool runAtStartup = false,
         bool runAsAdmin = false,
         string? arguments = null,
-        string? description = null)
+        string? description = null,
+        List<string>? target = null)
         => new()   // create and populate the entry from the arguments above
         {
             Id = id,                       // id and name both default to the given id
@@ -38,7 +39,8 @@ internal static class TestData   // static helper (no instances needed)
             RunAtStartup = runAtStartup,
             RunAsAdmin = runAsAdmin,
             Arguments = arguments,
-            Description = description
+            Description = description,
+            Target = target               // which machines it applies to (null = all)
         };
 
     public static Manifest Manifest(params ProgramEntry[] programs)   // build a manifest from a list of programs

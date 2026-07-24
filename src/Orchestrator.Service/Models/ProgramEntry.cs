@@ -90,6 +90,30 @@ public sealed class ProgramEntry
     [JsonPropertyName("metadata")]                    // maps JSON "metadata"
     public Dictionary<string, string>? Metadata { get; set; }  // arbitrary extra key/value info (optional)
 
+    /// <summary>
+    /// Which machines this program applies to. Omitted or null = ALL machines.
+    /// May be a single string ("all" or one hostname/machine-id) or an array of them.
+    /// Matching is case-insensitive against a machine's hostname OR its machine id;
+    /// the literal "all" (anywhere in the list) also matches every machine.
+    /// </summary>
+    [JsonPropertyName("target")]                      // maps JSON "target"
+    [JsonConverter(typeof(StringOrStringArrayConverter))]  // accept a string or an array of strings
+    public List<string>? Target { get; set; }         // null/empty = everyone; otherwise the allowed machines
+
+    /// <summary>True if this program should run on the machine with the given id/hostname.</summary>
+    public bool AppliesToMachine(string machineId, string hostname)
+    {
+        if (Target is null || Target.Count == 0) return true;   // no target set -> applies to all machines
+        foreach (var t in Target)                               // otherwise it must match this machine somehow
+        {
+            if (string.IsNullOrWhiteSpace(t)) continue;                                    // ignore blanks
+            if (string.Equals(t, "all", StringComparison.OrdinalIgnoreCase)) return true;  // "all" -> everyone
+            if (string.Equals(t, machineId, StringComparison.OrdinalIgnoreCase)) return true;  // matches this machine's id
+            if (string.Equals(t, hostname, StringComparison.OrdinalIgnoreCase)) return true;   // ...or its hostname
+        }
+        return false;   // named some machines, but none of them is this one
+    }
+
     /// <summary>Normalized checksum without the "sha256:" prefix, upper-invariant. Null if absent.</summary>
     [JsonIgnore]                                       // computed; not stored in JSON
     public string? NormalizedChecksum

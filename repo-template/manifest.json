@@ -52,7 +52,8 @@
       "arguments": "full-sync",
       "runAtStartup": true,
       "runAsAdmin": false,
-      "runOnce": false
+      "runOnce": false,
+      "target": ["DESKTOP-ABC123", "olegs-laptop"]
     },
     {
       "id": "old-tool-001",

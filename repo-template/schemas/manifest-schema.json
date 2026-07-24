@@ -39,6 +39,13 @@
         "runAtStartup": { "type": "boolean" },
         "runAsAdmin": { "type": "boolean" },
         "runOnce": { "type": "boolean" },
+        "target": {
+          "description": "Which machines this program runs on. Omit = all. A hostname or machine id, the keyword \"all\", or an array of them.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
         "deletedDate": { "type": "string" },
         "reason": { "type": "string" },
         "metadata": { "type": "object", "additionalProperties": { "type": "string" } }

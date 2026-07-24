@@ -23,6 +23,13 @@ public interface IManifestService   // the contract for manifest state + plannin
 
     /// <summary>Diff remote manifest against local manifest + on-disk state to produce a plan.</summary>
     SyncPlan BuildPlan(Manifest remote, Manifest? local, Dictionary<string, string> checksumCache);
+
+    /// <summary>
+    /// Build this machine's effective view of the manifest: active programs that do NOT
+    /// target this machine are turned into "deleted" entries so they get uninstalled here.
+    /// Programs already marked deleted pass through unchanged.
+    /// </summary>
+    Manifest FilterForMachine(Manifest remote, string machineId, string hostname);
 }
 
 public sealed class ManifestService : IManifestService   // the actual implementation
@@ -77,6 +84,46 @@ public sealed class ManifestService : IManifestService   // the actual implement
 
     public void SaveChecksumCache(Dictionary<string, string> cache)
         => File.WriteAllText(_config.ChecksumsPath, JsonSerializer.Serialize(cache, JsonOpts));  // write the fingerprint cache as JSON
+
+    public Manifest FilterForMachine(Manifest remote, string machineId, string hostname)
+    {
+        var effective = new Manifest   // a fresh manifest describing what THIS machine should have
+        {
+            Version = remote.Version,
+            LastUpdated = remote.LastUpdated,
+            Description = remote.Description,
+            TargetMachines = remote.TargetMachines
+        };
+
+        foreach (var p in remote.Programs)   // decide the fate of each program for this machine
+        {
+            if (p.Status != ProgramStatus.Active)   // already deleted upstream -> keep as-is (still needs removing)
+            {
+                effective.Programs.Add(p);
+                continue;
+            }
+            if (p.AppliesToMachine(machineId, hostname))   // targeted at this machine -> keep it active
+            {
+                effective.Programs.Add(p);
+            }
+            else   // active elsewhere but not here -> present it as deleted so it gets uninstalled locally
+            {
+                effective.Programs.Add(CloneAsDeleted(p));
+            }
+        }
+        return effective;
+    }
+
+    /// <summary>Deep-copy a program entry and mark it deleted (used to uninstall un-targeted programs).</summary>
+    private static ProgramEntry CloneAsDeleted(ProgramEntry p)
+    {
+        // Round-trip through JSON so the copy carries every field the uninstall path needs
+        // (installPath, name, id, runAsAdmin, ...) without a brittle field-by-field clone.
+        var clone = JsonSerializer.Deserialize<ProgramEntry>(JsonSerializer.Serialize(p, JsonOpts), JsonOpts)!;
+        clone.Status = ProgramStatus.Deleted;                          // mark it for removal on this machine
+        clone.Reason ??= "Not targeted to this machine";               // note why (unless one is already set)
+        return clone;
+    }
 
     public SyncPlan BuildPlan(Manifest remote, Manifest? local, Dictionary<string, string> checksumCache)
     {
