@@ -55,6 +55,24 @@
     .flags { display: flex; gap: 16px; flex-wrap: wrap; }
     .flags label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 13px; }
     .addgrid .full { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .seg button { border: none; border-radius: 0; padding: 7px 14px; background: var(--card); }
+    .seg button + button { border-left: 1px solid var(--line); }
+    .seg button.active { background: var(--accent); color: #fff; }
+    .search { font: inherit; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; min-width: 200px; background: var(--card); color: var(--ink); }
+    .titem { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; background: var(--card); }
+    .titem > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 11px 14px; }
+    .titem > summary::-webkit-details-marker { display: none; }
+    .titem > summary::after { content: '▸'; color: var(--muted); }
+    .titem[open] > summary::after { content: '▾'; }
+    .tname { font-weight: 600; }
+    .tid { font-size: 12px; }
+    .tsum { font-size: 12px; margin-left: auto; }
+    .tbody { padding: 8px 14px 14px; border-top: 1px solid var(--line); }
+    .allrow { display: flex; align-items: center; gap: 8px; margin: 6px 0 12px; font-size: 13px; }
+    .checklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 7px 16px; }
+    .checklist label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
     .scroll { overflow-x: auto; }
     .matrix th.mcol { text-align: center; white-space: nowrap; }
     .matrix td.cell { text-align: center; }
@@ -98,14 +116,16 @@
     </div>
 
     <div class="card">
-      <h2>Targeting <span class="muted">— tick which machines run each program</span></h2>
-      <div class="scroll">
-        <table id="matrix" class="matrix">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
+      <h2>Targeting</h2>
+      <div class="toolbar">
+        <div class="seg" id="viewSeg">
+          <button type="button" data-view="program" class="active">By program</button>
+          <button type="button" data-view="machine">By machine</button>
+        </div>
+        <input class="search" id="search" placeholder="Filter…" />
+        <span class="muted" id="tcount"></span>
       </div>
-      <div class="empty" id="noPrograms" hidden>No programs in the manifest.</div>
+      <div id="tview"></div>
     </div>
 
     <div class="card">
@@ -173,6 +193,9 @@
   <script>
     let state = null;
     let dirty = false;
+    let view = 'program';        // 'program' | 'machine' — persists across reloads
+    let filter = '';             // search text
+    const expanded = new Set();  // which rows are open (keys: 'p:<id>' / 'm:<id>')
 
     const $ = (s, r = document) => r.querySelector(s);
     const el = (tag, props = {}, kids = []) => {
@@ -239,7 +262,7 @@
       for (const msg of state.warnings || []) w.append(el('div', { className: 'warn', textContent: msg }));
 
       renderMachines();
-      renderMatrix();
+      renderTargeting();
     }
 
     function renderMachines() {
@@ -270,52 +293,126 @@
       }
     }
 
-    function renderMatrix() {
-      const thead = $('#matrix thead'), tbody = $('#matrix tbody');
-      thead.innerHTML = ''; tbody.innerHTML = '';
-      $('#noPrograms').hidden = state.programs.length > 0;
-      if (state.programs.length === 0) return;
+    // ---- targeting: two pivot views, sharing the same state.sel model ----------------
 
-      // header row: program | status | All | one column per machine
-      const hr = el('tr', {}, [
-        el('th', { textContent: 'Program' }), el('th', { textContent: 'Status' }), el('th', { textContent: 'All' })
-      ]);
-      for (const m of state.machines) {
-        hr.append(el('th', { className: 'mcol', title: m.hostname },
-          el('span', {}, [ el('span', { className: 'dot ' + (m.online ? 'on' : 'off') }), m.label || m.hostname ])));
+    // Whether a program currently runs on a machine.
+    function runsOn(sel, m) { return sel.all || sel.ids.has(m.machineId); }
+
+    // Toggle one program on/off for one machine (handles converting "all" -> explicit set).
+    function setRunsOn(p, m, on) {
+      const sel = state.sel[p.id];
+      if (on) {
+        if (!sel.all) sel.ids.add(m.machineId);
+      } else if (sel.all) {
+        sel.all = false;                                             // "all" minus this machine
+        sel.ids = new Set(state.machines.map(x => x.machineId));
+        sel.ids.delete(m.machineId);
+      } else {
+        sel.ids.delete(m.machineId);
       }
-      thead.append(hr);
+      markDirty();
+    }
 
-      for (const p of state.programs) {
+    // Human summary of where a program runs.
+    function targetSummary(sel) {
+      if (sel.all) return 'All machines';
+      const n = sel.ids.size;
+      if (n === 0) return 'No machines (inactive)';
+      const names = [...sel.ids].map(id => {
+        const m = state.machines.find(x => x.machineId === id); return m ? (m.label || m.hostname) : id;
+      });
+      return `${n} machine${n > 1 ? 's' : ''}: ` + names.slice(0, 3).join(', ') + (n > 3 ? ` +${n - 3}` : '');
+    }
+
+    function badge(active) {
+      return el('span', { className: 'pill ' + (active ? 'ok' : ''), textContent: active ? 'active' : 'deleted' });
+    }
+
+    function renderTargeting() {
+      const host = $('#tview'); host.innerHTML = '';
+      document.querySelectorAll('#viewSeg button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+      const q = (filter || '').toLowerCase();
+
+      if (state.programs.length === 0) { host.append(el('div', { className: 'empty', textContent: 'No programs in the manifest.' })); $('#tcount').textContent = ''; return; }
+      (view === 'machine') ? renderByMachine(host, q) : renderByProgram(host, q);
+    }
+
+    // Each program is an expandable row; expand to tick machines. Scales down a long fleet.
+    function renderByProgram(host, q) {
+      const progs = state.programs.filter(p => !q || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+      $('#tcount').textContent = `${progs.length} program${progs.length !== 1 ? 's' : ''}`;
+      if (progs.length === 0) { host.append(el('div', { className: 'empty', textContent: 'No programs match.' })); return; }
+
+      for (const p of progs) {
         const sel = state.sel[p.id];
-        const willBeActive = sel.all || sel.ids.size > 0;   // derived live from the ticks
-        const row = el('tr', {}, [
-          el('td', { className: 'prog' }, [ el('strong', { textContent: p.name }),
-            el('div', { className: 'muted', textContent: (p.id + (p.version ? ' · v' + p.version : '')) }) ])
-        ]);
+        const item = el('details', { className: 'titem' });
+        if (expanded.has('p:' + p.id)) item.open = true;
+        item.addEventListener('toggle', () => item.open ? expanded.add('p:' + p.id) : expanded.delete('p:' + p.id));
 
-        // live status badge (active if anything is ticked; else deleted)
-        row.append(el('td', {}, el('span', {
-          className: 'pill ' + (willBeActive ? 'ok' : ''),
-          textContent: willBeActive ? 'active' : 'deleted'
-        })));
+        const badgeEl = badge(sel.all || sel.ids.size > 0);
+        const sumEl = el('span', { className: 'tsum muted', textContent: targetSummary(sel) });
+        const update = () => { const a = sel.all || sel.ids.size > 0; badgeEl.className = 'pill ' + (a ? 'ok' : ''); badgeEl.textContent = a ? 'active' : 'deleted'; sumEl.textContent = targetSummary(sel); };
 
-        // "All machines" toggle
-        const allBox = el('input', { type: 'checkbox', checked: sel.all,
-          onchange: e => { sel.all = e.target.checked; markDirty(); renderMatrix(); } });
-        row.append(el('td', { className: 'allbox' }, allBox));
+        item.append(el('summary', {}, [
+          badgeEl,
+          el('span', { className: 'tname', textContent: p.name }),
+          el('span', { className: 'muted tid', textContent: p.id + (p.version ? ' · v' + p.version : '') }),
+          sumEl
+        ]));
 
-        // per-machine cells — re-render so the status badge updates immediately
+        const body = el('div', { className: 'tbody' });
+        const boxes = [];
+        const allCb = el('input', { type: 'checkbox', checked: sel.all,
+          onchange: e => { sel.all = e.target.checked; boxes.forEach(({ cb, id }) => { cb.disabled = sel.all; cb.checked = sel.all || sel.ids.has(id); }); markDirty(); update(); } });
+        body.append(el('label', { className: 'allrow' }, [ allCb, document.createTextNode(' All machines (including ones that join later)') ]));
+
+        const grid = el('div', { className: 'checklist' });
         for (const m of state.machines) {
-          const cb = el('input', {
-            type: 'checkbox',
-            checked: sel.all || sel.ids.has(m.machineId),
-            disabled: sel.all,
-            onchange: e => { e.target.checked ? sel.ids.add(m.machineId) : sel.ids.delete(m.machineId); markDirty(); renderMatrix(); }
-          });
-          row.append(el('td', { className: 'cell' }, cb));
+          const cb = el('input', { type: 'checkbox', checked: sel.all || sel.ids.has(m.machineId), disabled: sel.all,
+            onchange: e => { e.target.checked ? sel.ids.add(m.machineId) : sel.ids.delete(m.machineId); markDirty(); update(); } });
+          boxes.push({ cb, id: m.machineId });
+          grid.append(el('label', {}, [ cb, el('span', { className: 'dot ' + (m.online ? 'on' : 'off') }), document.createTextNode(m.label || m.hostname) ]));
         }
-        tbody.append(row);
+        body.append(grid);
+        item.append(body);
+        host.append(item);
+      }
+    }
+
+    // Each machine is an expandable row; expand to tick which programs run on it.
+    function renderByMachine(host, q) {
+      if (state.machines.length === 0) { host.append(el('div', { className: 'empty', textContent: 'No machines have reported yet.' })); $('#tcount').textContent = ''; return; }
+      const machines = state.machines.filter(m => !q || (m.label || '').toLowerCase().includes(q) || m.hostname.toLowerCase().includes(q));
+      $('#tcount').textContent = `${machines.length} machine${machines.length !== 1 ? 's' : ''}`;
+      if (machines.length === 0) { host.append(el('div', { className: 'empty', textContent: 'No machines match.' })); return; }
+
+      for (const m of machines) {
+        const item = el('details', { className: 'titem' });
+        if (expanded.has('m:' + m.machineId)) item.open = true;
+        item.addEventListener('toggle', () => item.open ? expanded.add('m:' + m.machineId) : expanded.delete('m:' + m.machineId));
+
+        const countOf = () => state.programs.filter(p => runsOn(state.sel[p.id], m)).length;
+        const sumEl = el('span', { className: 'tsum muted', textContent: `${countOf()} program(s)` });
+        const update = () => { sumEl.textContent = `${countOf()} program(s)`; };
+
+        item.append(el('summary', {}, [
+          el('span', { className: 'dot ' + (m.online ? 'on' : 'off') }),
+          el('span', { className: 'tname', textContent: m.label || m.hostname }),
+          el('span', { className: 'muted tid', textContent: m.hostname }),
+          sumEl
+        ]));
+
+        const body = el('div', { className: 'tbody' });
+        const grid = el('div', { className: 'checklist' });
+        for (const p of state.programs) {
+          const cb = el('input', { type: 'checkbox', checked: runsOn(state.sel[p.id], m),
+            onchange: e => { setRunsOn(p, m, e.target.checked); update(); } });
+          const allTag = state.sel[p.id].all ? el('span', { className: 'muted', textContent: ' (all)' }) : document.createTextNode('');
+          grid.append(el('label', {}, [ cb, document.createTextNode(p.name), allTag ]));
+        }
+        body.append(grid);
+        item.append(body);
+        host.append(item);
       }
     }
 
@@ -395,6 +492,10 @@
       } catch (e) { toast('Add failed: ' + e.message, true); btn.disabled = false; }
     }
     $('#a-submit').onclick = addProgram;
+
+    // View switch + filter
+    document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => { view = b.dataset.view; renderTargeting(); });
+    $('#search').oninput = e => { filter = e.target.value; renderTargeting(); };
 
     $('#reload').onclick = () => {
       if (dirty && !confirm('Discard unsaved changes and reload?')) return;
