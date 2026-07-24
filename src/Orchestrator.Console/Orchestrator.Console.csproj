@@ -1,0 +1,24 @@
+<!--
+====================================================================================
+ FILE PURPOSE (in plain terms):
+   The build recipe for the operator console — the small program YOU run on your own
+   PC to see the fleet and change what each machine runs. It's a cross-platform
+   (net8.0) ASP.NET web app: it serves a local web page and talks to a local git
+   clone of your control repo. Deliberately does NOT reference the Windows service
+   project, so it runs on Windows, macOS, or Linux.
+====================================================================================
+-->
+<Project Sdk="Microsoft.NET.Sdk.Web">   <!-- ASP.NET Core web app -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>            <!-- cross-platform .NET 8 (no -windows) -->
+    <Nullable>enable</Nullable>                           <!-- null-safety warnings -->
+    <ImplicitUsings>enable</ImplicitUsings>              <!-- fewer usings needed per file -->
+    <LangVersion>latest</LangVersion>                     <!-- newest C# features -->
+    <RootNamespace>Orchestrator.Console</RootNamespace>  <!-- default namespace -->
+    <AssemblyName>orchestrator-console</AssemblyName>     <!-- output exe name -->
+    <Version>1.0.0</Version>
+    <Product>GitHub Orchestrator Console</Product>
+  </PropertyGroup>
+
+</Project>
