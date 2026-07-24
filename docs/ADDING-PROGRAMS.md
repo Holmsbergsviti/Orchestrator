@@ -81,7 +81,7 @@ By default every program installs on **every** machine. Add a `target` to scope 
   away (drop that machine from the list), the machine **uninstalls** it on the next sync —
   files and startup entry — exactly as if it had been deleted there.
 - Editing this by hand is fine; the [operator console](CONSOLE.md) gives you a checkbox grid
-  and writes machine ids for you.
+  and writes the machines' hostnames for you.
 
 ## Field reference
 | Field | Required | Notes |

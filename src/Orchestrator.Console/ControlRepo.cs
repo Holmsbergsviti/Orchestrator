@@ -151,22 +151,9 @@ public sealed class ControlRepo
         var labels = LoadLabels(_git.ReadFileFromRef(MainRef, FleetLabelsPath));
 
         // --- heartbeats (from state/*.json on the fleet-state branch) ---
-        var heartbeats = new List<HeartbeatFile>();
-        var stateFiles = _git.ListDirOnRef(FleetRef, StateDir);
-        if (stateFiles.Count == 0)
+        var heartbeats = ReadHeartbeats();
+        if (heartbeats.Count == 0)
             resp.Warnings.Add($"No machines have reported yet (branch '{_opt.FleetStateBranch}' is empty or missing).");
-        foreach (var file in stateFiles)
-        {
-            if (!file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
-            var text = _git.ReadFileFromRef(FleetRef, file);
-            if (text is null) continue;
-            try
-            {
-                var hb = JsonSerializer.Deserialize<HeartbeatFile>(text, JsonRead);
-                if (hb is not null && !string.IsNullOrWhiteSpace(hb.MachineId)) heartbeats.Add(hb);
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "Unreadable heartbeat {File}", file); }
-        }
 
         resp.Machines = heartbeats
             .Select(hb => ToMachineView(hb, labels))
@@ -205,6 +192,9 @@ public sealed class ControlRepo
         if (root["programs"] is not JsonArray progs)
             return new SaveResult { Ok = false, Message = "manifest.json has no 'programs' array." };
 
+        // Write human-readable hostnames into the manifest (the UI sends stable machine ids;
+        // we translate them to the machine's hostname so manifest.json stays readable).
+        var hostById = HostnamesById();
         var byId = req.ProgramTargets.ToDictionary(t => t.Id, StringComparer.OrdinalIgnoreCase);
         foreach (var prog in progs.OfType<JsonObject>())
         {
@@ -217,9 +207,13 @@ public sealed class ControlRepo
             }
             else
             {
+                var tokens = t.MachineIds
+                    .Select(mid => hostById.TryGetValue(mid, out var host) ? host : mid)   // id -> hostname (fallback: id)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
                 var arr = new JsonArray();
-                foreach (var mid in t.MachineIds.Distinct(StringComparer.OrdinalIgnoreCase)) arr.Add(mid);
-                prog["target"] = arr;    // explicit machine-id list
+                foreach (var tok in tokens) arr.Add(tok);
+                prog["target"] = tokens.Count == 1 ? JsonValue.Create(tokens[0]) : arr;   // single -> plain string, else array
             }
         }
         root["lastUpdated"] = DateTimeOffset.UtcNow.ToString("O");   // stamp the edit
@@ -250,6 +244,32 @@ public sealed class ControlRepo
     }
 
     // ---- mapping helpers ---------------------------------------------------------------
+
+    /// <summary>Read all heartbeat files from the fleet-state branch.</summary>
+    private List<HeartbeatFile> ReadHeartbeats()
+    {
+        var heartbeats = new List<HeartbeatFile>();
+        foreach (var file in _git.ListDirOnRef(FleetRef, StateDir))
+        {
+            if (!file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
+            var text = _git.ReadFileFromRef(FleetRef, file);
+            if (text is null) continue;
+            try
+            {
+                var hb = JsonSerializer.Deserialize<HeartbeatFile>(text, JsonRead);
+                if (hb is not null && !string.IsNullOrWhiteSpace(hb.MachineId)) heartbeats.Add(hb);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Unreadable heartbeat {File}", file); }
+        }
+        return heartbeats;
+    }
+
+    /// <summary>machine id -> hostname, from the current heartbeats (for writing readable targets).</summary>
+    private Dictionary<string, string> HostnamesById()
+        => ReadHeartbeats()
+            .Where(h => !string.IsNullOrWhiteSpace(h.Hostname))
+            .GroupBy(h => h.MachineId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Hostname, StringComparer.OrdinalIgnoreCase);
 
     private static Dictionary<string, string> LoadLabels(string? fleetJson)
     {

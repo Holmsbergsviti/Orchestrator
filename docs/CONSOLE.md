@@ -69,8 +69,10 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.
 
-Targets are written as **machine ids** (stable GUIDs), so renaming a computer never breaks
-targeting. The grid shows friendly labels; the manifest stores ids.
+Targets are written as **hostnames**, so `manifest.json` stays human-readable
+(`"target": ["olegs-laptop", "desktop-abc123"]`). The grid shows your friendly labels; the
+manifest stores the machine's real hostname. (Note: if two machines share a hostname, a
+hostname target hits both — rename one to disambiguate.)
 
 ## How machines appear
 Each agent commits `state/<machineId>.json` to the `fleet-state` branch when its situation
