@@ -148,6 +148,8 @@
         data = await r.json();
       } catch (e) { toast('Load failed: ' + e.message, true); return; }
       state = data;
+      // Only active programs are targetable; hide deleted ones from the grid.
+      state.programs = (data.programs || []).filter(p => (p.status || 'active').toLowerCase() === 'active');
 
       // Working selection: a Set of machineIds per program, plus an "all" flag.
       state.sel = {};
