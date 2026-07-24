@@ -34,6 +34,8 @@ public sealed class OrchestratorDefaults
     [JsonPropertyName("manifestFileName")]   public string ManifestFileName { get; set; } = "manifest.json";           // manifest file name inside the control repo
     [JsonPropertyName("defaultBranch")]      public string DefaultBranch { get; set; } = "main";                       // default control-repo branch
     [JsonPropertyName("defaultSyncIntervalMinutes")] public int DefaultSyncIntervalMinutes { get; set; } = 60;         // default minutes between syncs
+    [JsonPropertyName("fleetStateBranch")]   public string FleetStateBranch { get; set; } = "fleet-state";           // branch heartbeats are committed to
+    [JsonPropertyName("heartbeatMaxIntervalMinutes")] public int HeartbeatMaxIntervalMinutes { get; set; } = 360;    // force a heartbeat at least this often
     [JsonPropertyName("codeRepo")]           public string CodeRepo { get; set; } = "Holmsbergsviti/Orchestrator";     // repo hosting the exe + scripts
     [JsonPropertyName("codeRef")]            public string CodeRef { get; set; } = "main";                             // branch of that code repo
 

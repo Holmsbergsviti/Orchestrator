@@ -10,6 +10,8 @@
   "manifestFileName": "manifest.json",
   "defaultBranch": "main",
   "defaultSyncIntervalMinutes": 3,
+  "fleetStateBranch": "fleet-state",
+  "heartbeatMaxIntervalMinutes": 360,
   "codeRepo": "Holmsbergsviti/Orchestrator",
   "codeRef": "main"
 }

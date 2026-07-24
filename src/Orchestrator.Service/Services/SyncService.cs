@@ -30,6 +30,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly IChecksumService _checksums;       // verifies downloaded files
     private readonly IStartupManager _startup;          // handles startup registration
     private readonly IConfigService _configService;     // config + machine state
+    private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
     private readonly ILogger<SyncService> _log;         // logger
     private readonly OrchestratorConfig _config;        // our settings
 
@@ -39,6 +40,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         IChecksumService checksums,
         IStartupManager startup,
         IConfigService configService,
+        IFleetReporter fleetReporter,
         ILogger<SyncService> log)   // all dependencies handed in by DI
     {
         _github = github;                   // store each collaborator
@@ -46,6 +48,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         _checksums = checksums;
         _startup = startup;
         _configService = configService;
+        _fleetReporter = fleetReporter;
         _config = configService.Config;     // grab the settings for convenience
         _log = log;
     }
@@ -67,54 +70,61 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 record.Success = false;                                             // mark this cycle as failed
                 record.Errors.Add("Manifest fetch failed; keeping current state."); // note why
                 _log.LogWarning("Manifest unavailable — skipping cycle, will retry next interval");
-                return Finish(record, sw);   // stop here; keep the machine as-is and try again next time
+                // Fall through to reporting/Finish so the heartbeat still shows this machine is alive.
             }
-
-            record.ManifestVersion = remote.Version;   // remember which manifest version we're applying
-            _log.LogInformation("Manifest fetched (v{Version}). {Active} active, {Deleted} deleted",
-                remote.Version, remote.ActivePrograms.Count(), remote.DeletedPrograms.Count());  // log a summary
-
-            var local = _manifests.LoadLocalManifest();          // the manifest we applied last time (or null)
-            var checksumCache = _manifests.LoadChecksumCache();  // remembered file fingerprints
-            var plan = _manifests.BuildPlan(remote, local, checksumCache);   // work out the to-do list
-
-            if (!plan.HasWork)   // nothing to install/update/delete?
-                _log.LogInformation("Everything up to date.");
-
-            foreach (var action in plan.Actions)   // carry out each planned action
+            else
             {
-                ct.ThrowIfCancellationRequested();   // bail out promptly if the service is stopping
-                try
+                record.ManifestVersion = remote.Version;   // remember which manifest version we're applying
+
+                // Reduce the manifest to THIS machine's view: programs not targeted here are
+                // presented as deleted so they get uninstalled locally (per-machine targeting).
+                var machine = _configService.LoadOrCreateMachineConfig();   // this machine's id + hostname
+                var effective = _manifests.FilterForMachine(remote, machine.MachineId, machine.Hostname);
+                _log.LogInformation("Manifest v{Version}: {Active} active in manifest, {Mine} apply to this machine ({Host})",
+                    remote.Version, remote.ActivePrograms.Count(), effective.ActivePrograms.Count(), machine.Hostname);  // log a summary
+
+                var local = _manifests.LoadLocalManifest();          // the manifest we applied last time (or null)
+                var checksumCache = _manifests.LoadChecksumCache();  // remembered file fingerprints
+                var plan = _manifests.BuildPlan(effective, local, checksumCache);   // work out the to-do list for this machine
+
+                if (!plan.HasWork)   // nothing to install/update/delete?
+                    _log.LogInformation("Everything up to date.");
+
+                foreach (var action in plan.Actions)   // carry out each planned action
                 {
-                    switch (action.Type)   // what should we do for this program?
+                    ct.ThrowIfCancellationRequested();   // bail out promptly if the service is stopping
+                    try
                     {
-                        case SyncActionType.Install:
-                        case SyncActionType.Update:
-                            await InstallAsync(action, checksumCache, ct);   // download + install (same code for both)
-                            (action.Type == SyncActionType.Install ? record.Installed : record.Updated)  // record it under...
-                                .Add($"{action.Program.Name} v{action.Program.Version}");                // ...installed or updated
-                            break;
-                        case SyncActionType.Delete:
-                            DeleteProgram(action.Program, checksumCache);   // uninstall it
-                            record.Deleted.Add(action.Program.Name);        // record the deletion
-                            break;
-                        case SyncActionType.UpToDate:
-                            break;   // nothing to do
+                        switch (action.Type)   // what should we do for this program?
+                        {
+                            case SyncActionType.Install:
+                            case SyncActionType.Update:
+                                await InstallAsync(action, checksumCache, ct);   // download + install (same code for both)
+                                (action.Type == SyncActionType.Install ? record.Installed : record.Updated)  // record it under...
+                                    .Add($"{action.Program.Name} v{action.Program.Version}");                // ...installed or updated
+                                break;
+                            case SyncActionType.Delete:
+                                DeleteProgram(action.Program, checksumCache);   // uninstall it
+                                record.Deleted.Add(action.Program.Name);        // record the deletion
+                                break;
+                            case SyncActionType.UpToDate:
+                                break;   // nothing to do
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        var msg = $"{action.Type} {action.Program.Name}: {ex.Message}";   // build an error message
+                        record.Errors.Add(msg);                                           // record it...
+                        _log.LogError(ex, "Action failed: {Action}", action);             // ...and log it, but keep going with the next action
                     }
                 }
-                catch (Exception ex)
-                {
-                    var msg = $"{action.Type} {action.Program.Name}: {ex.Message}";   // build an error message
-                    record.Errors.Add(msg);                                           // record it...
-                    _log.LogError(ex, "Action failed: {Action}", action);             // ...and log it, but keep going with the next action
-                }
+
+                // Persist new state so next cycle diffs correctly.
+                _manifests.SaveChecksumCache(checksumCache);   // save the updated fingerprints
+                _manifests.SaveLocalManifest(effective);       // remember THIS machine's applied view as the new baseline
+
+                record.Success = record.Errors.Count == 0;     // success only if nothing errored
             }
-
-            // Persist new state so next cycle diffs correctly.
-            _manifests.SaveChecksumCache(checksumCache);   // save the updated fingerprints
-            _manifests.SaveLocalManifest(remote);          // remember this manifest as the new baseline
-
-            record.Success = record.Errors.Count == 0;     // success only if nothing errored
         }
         catch (OperationCanceledException)
         {
@@ -127,6 +137,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
             _log.LogError(ex, "Sync cycle failed");
         }
 
+        await _fleetReporter.ReportAsync(record, ct);   // tell GitHub our state (best-effort; never throws)
         return Finish(record, sw);   // wrap up (timing, history, logs) and return the record
     }
 

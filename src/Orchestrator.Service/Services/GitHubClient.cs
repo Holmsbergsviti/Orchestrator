@@ -22,7 +22,19 @@ public interface IGitHubClient   // the contract for GitHub access
 
     /// <summary>Download the raw bytes for a program file.</summary>
     Task<byte[]> DownloadFileAsync(ProgramEntry program, CancellationToken ct = default);
+
+    /// <summary>Get the blob SHA of a file on a branch, or null if it doesn't exist (404).</summary>
+    Task<string?> GetFileShaAsync(string repoPath, string branch, CancellationToken ct = default);
+
+    /// <summary>Ensure <paramref name="branch"/> exists, creating it from <paramref name="baseBranch"/> if missing. Returns false if it couldn't be ensured.</summary>
+    Task<bool> EnsureBranchAsync(string branch, string baseBranch, CancellationToken ct = default);
+
+    /// <summary>Create or update a file on a branch. Pass the current <paramref name="sha"/> to update, or null to create.</summary>
+    Task PutFileAsync(string repoPath, byte[] content, string branch, string commitMessage, string? sha, CancellationToken ct = default);
 }
+
+/// <summary>Thrown when GitHub rejects a write (401/403) — usually the token lacks write access.</summary>
+public sealed class GitHubWriteForbiddenException(string message) : Exception(message);
 
 /// <summary>
 /// Talks to the GitHub Contents API with the "raw" media type so it works for
@@ -127,4 +139,93 @@ public sealed class GitHubClient : IGitHubClient
 
         return await resp.Content.ReadAsByteArrayAsync(ct);   // read and return the file's bytes
     }
+
+    // ---- Write path (heartbeats) -------------------------------------------------------
+
+    public async Task<string?> GetFileShaAsync(string repoPath, string branch, CancellationToken ct = default)
+    {
+        var client = _httpFactory.CreateClient(HttpClientName);
+        var uri = $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{EncodePath(repoPath)}?ref={Uri.EscapeDataString(branch)}";
+
+        using var resp = await client.GetAsync(uri, ct);   // default Accept (application/vnd.github+json) -> metadata with "sha"
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;   // file not there yet -> no sha
+        resp.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync(ct));
+        return doc.RootElement.TryGetProperty("sha", out var sha) ? sha.GetString() : null;   // pull out the blob sha
+    }
+
+    public async Task<bool> EnsureBranchAsync(string branch, string baseBranch, CancellationToken ct = default)
+    {
+        if (await GetRefShaAsync(branch, ct) is not null) return true;   // already exists -> nothing to do
+
+        var baseSha = await GetRefShaAsync(baseBranch, ct);   // branch off the base branch's current tip
+        if (baseSha is null)
+        {
+            _log.LogWarning("Cannot create branch '{Branch}': base branch '{Base}' not found", branch, baseBranch);
+            return false;
+        }
+
+        var client = _httpFactory.CreateClient(HttpClientName);
+        var body = new { @ref = $"refs/heads/{branch}", sha = baseSha };   // GitHub Git-refs API: create a new branch ref
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/repos/{_config.RepoOwner}/{_config.RepoName}/git/refs")
+        {
+            Content = JsonContent(body)
+        };
+        using var resp = await client.SendAsync(req, ct);
+        ThrowIfForbidden(resp, $"create branch '{branch}'");
+        if (resp.StatusCode == HttpStatusCode.UnprocessableEntity) return await GetRefShaAsync(branch, ct) is not null;  // raced: someone else created it
+        resp.EnsureSuccessStatusCode();
+        _log.LogInformation("Created fleet-state branch '{Branch}'", branch);
+        return true;
+    }
+
+    public async Task PutFileAsync(string repoPath, byte[] content, string branch, string commitMessage, string? sha, CancellationToken ct = default)
+    {
+        var client = _httpFactory.CreateClient(HttpClientName);
+        var body = new Dictionary<string, string?>   // GitHub Contents API: create/update a file
+        {
+            ["message"] = commitMessage,
+            ["content"] = Convert.ToBase64String(content),   // file bytes must be base64-encoded
+            ["branch"] = branch
+        };
+        if (!string.IsNullOrEmpty(sha)) body["sha"] = sha;   // updating an existing file requires its current sha
+
+        using var req = new HttpRequestMessage(HttpMethod.Put, $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{EncodePath(repoPath)}")
+        {
+            Content = JsonContent(body)
+        };
+        using var resp = await client.SendAsync(req, ct);
+        ThrowIfForbidden(resp, $"write '{repoPath}'");
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Get the commit SHA a branch points at, or null if the branch doesn't exist.</summary>
+    private async Task<string?> GetRefShaAsync(string branch, CancellationToken ct)
+    {
+        var client = _httpFactory.CreateClient(HttpClientName);
+        var uri = $"/repos/{_config.RepoOwner}/{_config.RepoName}/git/ref/heads/{Uri.EscapeDataString(branch)}";
+        using var resp = await client.GetAsync(uri, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        resp.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync(ct));
+        return doc.RootElement.TryGetProperty("object", out var obj) && obj.TryGetProperty("sha", out var sha)
+            ? sha.GetString()
+            : null;
+    }
+
+    private static void ThrowIfForbidden(HttpResponseMessage resp, string action)
+    {
+        if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new GitHubWriteForbiddenException(
+                $"GitHub refused to {action} ({(int)resp.StatusCode}). The token likely lacks write access to the repo.");
+    }
+
+    /// <summary>Escape a repo path for a URL while keeping the '/' separators intact.</summary>
+    private static string EncodePath(string repoPath)
+        => Uri.EscapeDataString(repoPath).Replace("%2F", "/");
+
+    private static StringContent JsonContent(object body)
+        => new(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json");
 }

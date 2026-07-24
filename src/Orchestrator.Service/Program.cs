@@ -86,6 +86,7 @@ try
     builder.Services.AddSingleton<IScheduledTaskService, ScheduledTaskService>();
     builder.Services.AddSingleton<IStartupManager, StartupManager>();
     builder.Services.AddSingleton<IManifestService, ManifestService>();
+    builder.Services.AddSingleton<IFleetReporter, FleetReporter>();
     builder.Services.AddSingleton<ISyncService, SyncService>();
     builder.Services.AddHostedService<Worker>();                             // register the background loop that drives everything
 

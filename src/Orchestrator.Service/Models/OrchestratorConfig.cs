@@ -48,6 +48,15 @@ public sealed class OrchestratorConfig
     /// <summary>Prefix applied to registry entry names to namespace them.</summary>
     public string RegistryEntryPrefix { get; set; } = OrchestratorDefaults.Instance.RegistryEntryPrefix;   // name prefix so our entries are identifiable (from defaults.json)
 
+    /// <summary>Whether this machine reports a heartbeat back to GitHub. Needs a token with write access.</summary>
+    public bool ReportState { get; set; } = true;               // true = commit state/<machineId>.json each time it changes
+
+    /// <summary>Branch the heartbeat files are committed to (kept off the main branch).</summary>
+    public string FleetStateBranch { get; set; } = OrchestratorDefaults.Instance.FleetStateBranch;   // where heartbeats live (from defaults.json)
+
+    /// <summary>Push a heartbeat at least this often even when nothing changed (freshness bound).</summary>
+    public int HeartbeatMaxIntervalMinutes { get; set; } = OrchestratorDefaults.Instance.HeartbeatMaxIntervalMinutes;  // caps how stale "last seen" can get (from defaults.json)
+
     [JsonIgnore] public string ProgramsPath => Path.Combine(RootPath, "programs");                    // <root>\programs — installed program files
     [JsonIgnore] public string LogsPath => Path.Combine(RootPath, "logs");                            // <root>\logs — log files
     [JsonIgnore] public string CachePath => Path.Combine(RootPath, "cache");                          // <root>\cache — remembered state
@@ -55,6 +64,7 @@ public sealed class OrchestratorConfig
     [JsonIgnore] public string ChecksumsPath => Path.Combine(CachePath, "checksums.json");            // known-good file fingerprints
     [JsonIgnore] public string SyncHistoryPath => Path.Combine(LogsPath, "sync-history.json");        // history of past sync runs
     [JsonIgnore] public string MachineConfigPath => Path.Combine(RootPath, "config.json");            // this machine's own state file
+    [JsonIgnore] public string LastHeartbeatPath => Path.Combine(CachePath, "last-heartbeat.json");   // the last heartbeat we pushed (for change detection)
 }
 
 /// <summary>Per-machine mutable state persisted to config.json (MachineID etc.).</summary>
