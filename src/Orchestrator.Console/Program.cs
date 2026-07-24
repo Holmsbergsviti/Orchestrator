@@ -62,6 +62,17 @@ app.MapPost("/api/save", async (SaveRequest req, ControlRepo r, CancellationToke
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// Add a new program (optionally importing a local file), then commit + push.
+app.MapPost("/api/add", async (AddRequest req, ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.AddProgramAsync(req, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
 // A tiny health/info endpoint the page uses to show which repo it's driving.
 app.MapGet("/api/info", (ControlRepo r) => Results.Ok(new { repoPath = r.RepoPath }));
 

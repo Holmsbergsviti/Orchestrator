@@ -45,6 +45,16 @@
     .pill.ok { background: var(--okbg); color: var(--ok); border-color: #a7f3d0; }
     .pill.bad { background: var(--errbg); color: var(--err); border-color: #fecaca; }
     input.label { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; width: 160px; }
+    details.add summary { cursor: pointer; font-size: 14px; font-weight: 600; list-style: none; }
+    details.add summary::-webkit-details-marker { display: none; }
+    details.add summary::before { content: '＋ '; color: var(--accent); }
+    details.add[open] summary::before { content: '– '; }
+    .addgrid { display: grid; grid-template-columns: 130px 1fr; gap: 10px 14px; align-items: center; margin-top: 16px; max-width: 660px; }
+    .addgrid > label { color: var(--muted); font-size: 13px; }
+    .fld { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; width: 100%; background: var(--card); color: var(--ink); }
+    .flags { display: flex; gap: 16px; flex-wrap: wrap; }
+    .flags label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 13px; }
+    .addgrid .full { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
     .scroll { overflow-x: auto; }
     .matrix th.mcol { text-align: center; white-space: nowrap; }
     .matrix td.cell { text-align: center; }
@@ -95,7 +105,66 @@
           <tbody></tbody>
         </table>
       </div>
-      <div class="empty" id="noPrograms" hidden>No active programs in the manifest.</div>
+      <div class="empty" id="noPrograms" hidden>No programs in the manifest.</div>
+    </div>
+
+    <div class="card">
+      <details class="add">
+        <summary>Add a program</summary>
+        <div class="addgrid">
+          <label for="a-name">Name *</label>
+          <input class="fld" id="a-name" placeholder="my-app" />
+
+          <label for="a-version">Version</label>
+          <input class="fld" id="a-version" value="1.0" />
+
+          <label for="a-type">Type</label>
+          <select class="fld" id="a-type">
+            <option value="exe">exe</option>
+            <option value="batch">batch (.bat)</option>
+            <option value="powershell">powershell (.ps1)</option>
+            <option value="vbs">vbs</option>
+            <option value="python">python (.py)</option>
+          </select>
+
+          <label>File source</label>
+          <div class="flags">
+            <label><input type="radio" name="a-src" value="import" checked /> Import a local file</label>
+            <label><input type="radio" name="a-src" value="path" /> Already in the repo</label>
+          </div>
+
+          <label for="a-local" id="a-local-label">Local file path</label>
+          <input class="fld" id="a-local" placeholder="/Users/you/tools/my-app.exe" />
+
+          <label for="a-repopath" id="a-repopath-label" hidden>Repo path</label>
+          <input class="fld" id="a-repopath" placeholder="programs/my-app/v1.0/my-app.exe" hidden />
+
+          <label for="a-filename">File name</label>
+          <input class="fld" id="a-filename" placeholder="(defaults to the file's own name)" />
+
+          <label for="a-install">Install path</label>
+          <input class="fld" id="a-install" placeholder="C:\Windows\Orch\programs\my-app (default)" />
+
+          <label for="a-args">Arguments</label>
+          <input class="fld" id="a-args" placeholder="--silent (optional)" />
+
+          <label for="a-desc">Description</label>
+          <input class="fld" id="a-desc" placeholder="(optional)" />
+
+          <label>Options</label>
+          <div class="flags">
+            <label><input type="checkbox" id="a-startup" /> runAtStartup</label>
+            <label><input type="checkbox" id="a-admin" /> runAsAdmin</label>
+            <label><input type="checkbox" id="a-once" /> runOnce</label>
+            <label><input type="checkbox" id="a-all" checked /> all machines</label>
+          </div>
+
+          <div class="full">
+            <button type="button" id="a-submit" class="primary">Add &amp; push</button>
+            <span class="muted">Imports the file into the repo, checksums it, commits &amp; pushes.</span>
+          </div>
+        </div>
+      </details>
     </div>
   </main>
 
@@ -148,12 +217,14 @@
         data = await r.json();
       } catch (e) { toast('Load failed: ' + e.message, true); return; }
       state = data;
-      // Only active programs are targetable; hide deleted ones from the grid.
-      state.programs = (data.programs || []).filter(p => (p.status || 'active').toLowerCase() === 'active');
+      state.programs = data.programs || [];
 
-      // Working selection: a Set of machineIds per program, plus an "all" flag.
+      // Working selection per program: an "all" flag + a Set of machineIds.
+      // Deleted programs start unmarked; ticking a box re-activates them on save.
       state.sel = {};
       for (const p of state.programs) {
+        const isActive = (p.status || 'active').toLowerCase() === 'active';
+        if (!isActive) { state.sel[p.id] = { all: false, ids: new Set() }; continue; }
         const checked = new Set(state.machines.filter(m => applies(p, m)).map(m => m.machineId));
         state.sel[p.id] = { all: p.allMachines, ids: checked };
       }
@@ -205,8 +276,10 @@
       $('#noPrograms').hidden = state.programs.length > 0;
       if (state.programs.length === 0) return;
 
-      // header row: program | All | one column per machine
-      const hr = el('tr', {}, [ el('th', { textContent: 'Program' }), el('th', { textContent: 'All' }) ]);
+      // header row: program | status | All | one column per machine
+      const hr = el('tr', {}, [
+        el('th', { textContent: 'Program' }), el('th', { textContent: 'Status' }), el('th', { textContent: 'All' })
+      ]);
       for (const m of state.machines) {
         hr.append(el('th', { className: 'mcol', title: m.hostname },
           el('span', {}, [ el('span', { className: 'dot ' + (m.online ? 'on' : 'off') }), m.label || m.hostname ])));
@@ -215,23 +288,30 @@
 
       for (const p of state.programs) {
         const sel = state.sel[p.id];
+        const willBeActive = sel.all || sel.ids.size > 0;   // derived live from the ticks
         const row = el('tr', {}, [
           el('td', { className: 'prog' }, [ el('strong', { textContent: p.name }),
             el('div', { className: 'muted', textContent: (p.id + (p.version ? ' · v' + p.version : '')) }) ])
         ]);
+
+        // live status badge (active if anything is ticked; else deleted)
+        row.append(el('td', {}, el('span', {
+          className: 'pill ' + (willBeActive ? 'ok' : ''),
+          textContent: willBeActive ? 'active' : 'deleted'
+        })));
 
         // "All machines" toggle
         const allBox = el('input', { type: 'checkbox', checked: sel.all,
           onchange: e => { sel.all = e.target.checked; markDirty(); renderMatrix(); } });
         row.append(el('td', { className: 'allbox' }, allBox));
 
-        // per-machine cells
+        // per-machine cells — re-render so the status badge updates immediately
         for (const m of state.machines) {
           const cb = el('input', {
             type: 'checkbox',
             checked: sel.all || sel.ids.has(m.machineId),
             disabled: sel.all,
-            onchange: e => { e.target.checked ? sel.ids.add(m.machineId) : sel.ids.delete(m.machineId); markDirty(); }
+            onchange: e => { e.target.checked ? sel.ids.add(m.machineId) : sel.ids.delete(m.machineId); markDirty(); renderMatrix(); }
           });
           row.append(el('td', { className: 'cell' }, cb));
         }
@@ -267,6 +347,54 @@
         }
       } catch (e) { toast('Save failed: ' + e.message, true); $('#save').disabled = false; }
     }
+
+    // --- Add-program form ---
+    document.querySelectorAll('input[name="a-src"]').forEach(radio => radio.onchange = () => {
+      const imp = document.querySelector('input[name="a-src"]:checked').value === 'import';
+      $('#a-local').hidden = !imp; $('#a-local-label').hidden = !imp;
+      $('#a-repopath').hidden = imp; $('#a-repopath-label').hidden = imp;
+    });
+
+    async function addProgram() {
+      const mode = document.querySelector('input[name="a-src"]:checked').value;
+      const body = {
+        name: $('#a-name').value.trim(),
+        version: $('#a-version').value.trim() || '1.0',
+        type: $('#a-type').value,
+        description: $('#a-desc').value.trim(),
+        sourceMode: mode,
+        localFilePath: $('#a-local').value.trim(),
+        repoPath: $('#a-repopath').value.trim(),
+        fileName: $('#a-filename').value.trim(),
+        installPath: $('#a-install').value.trim(),
+        arguments: $('#a-args').value.trim(),
+        runAtStartup: $('#a-startup').checked,
+        runAsAdmin: $('#a-admin').checked,
+        runOnce: $('#a-once').checked,
+        all: $('#a-all').checked,
+        machineIds: []
+      };
+      if (!body.name) { toast('Name is required', true); return; }
+      if (mode === 'import' && !body.localFilePath) { toast('Local file path is required', true); return; }
+      if (mode === 'path' && !body.repoPath) { toast('Repo path is required', true); return; }
+
+      const btn = $('#a-submit'); btn.disabled = true;
+      try {
+        const r = await fetch('/api/add', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) {
+          toast(res.commit ? `Added · commit ${res.commit}` : (res.message || 'Added'));
+          ['a-name', 'a-local', 'a-repopath', 'a-filename', 'a-install', 'a-args', 'a-desc'].forEach(id => $('#' + id).value = '');
+          await load();
+        } else {
+          toast('Add failed: ' + (res.message || res.detail || 'unknown error'), true);
+          btn.disabled = false;
+        }
+      } catch (e) { toast('Add failed: ' + e.message, true); btn.disabled = false; }
+    }
+    $('#a-submit').onclick = addProgram;
 
     $('#reload').onclick = () => {
       if (dirty && !confirm('Discard unsaved changes and reload?')) return;

@@ -8,6 +8,7 @@
 //   commits and pushes. Manifest edits go through a JSON DOM so no other field is lost.
 // =====================================================================================
 
+using System.Security.Cryptography;        // SHA256 for imported program files
 using System.Text.Json;                    // parsing/serializing
 using System.Text.Json.Nodes;              // JsonNode DOM for safe manifest edits
 using System.Text.Json.Serialization;      // attribute mapping for the DTOs
@@ -83,6 +84,27 @@ public sealed class SaveResult
     public bool Ok { get; set; }
     public string Message { get; set; } = "";
     public string? Commit { get; set; }
+}
+
+/// <summary>Request to add a new program to the manifest.</summary>
+public sealed class AddRequest
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("version")] public string Version { get; set; } = "1.0";
+    [JsonPropertyName("type")] public string Type { get; set; } = "exe";
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    /// <summary>"import" = copy a local file into the repo; "path" = reference a file already in the repo.</summary>
+    [JsonPropertyName("sourceMode")] public string SourceMode { get; set; } = "import";
+    [JsonPropertyName("localFilePath")] public string? LocalFilePath { get; set; }
+    [JsonPropertyName("repoPath")] public string? RepoPath { get; set; }
+    [JsonPropertyName("fileName")] public string? FileName { get; set; }
+    [JsonPropertyName("installPath")] public string? InstallPath { get; set; }
+    [JsonPropertyName("arguments")] public string? Arguments { get; set; }
+    [JsonPropertyName("runAtStartup")] public bool RunAtStartup { get; set; }
+    [JsonPropertyName("runAsAdmin")] public bool RunAsAdmin { get; set; }
+    [JsonPropertyName("runOnce")] public bool RunOnce { get; set; }
+    [JsonPropertyName("all")] public bool All { get; set; } = true;
+    [JsonPropertyName("machineIds")] public List<string> MachineIds { get; set; } = new();
 }
 
 /// <summary>The heartbeat file shape (must match the service's Heartbeat model).</summary>
@@ -165,62 +187,34 @@ public sealed class ControlRepo
         return resp;
     }
 
-    /// <summary>Apply targeting + label edits to the repo and push. Returns the outcome.</summary>
+    /// <summary>Apply targeting/activation + label edits to the repo and push. Returns the outcome.</summary>
     public async Task<SaveResult> SaveAsync(SaveRequest req, CancellationToken ct)
     {
-        await _git.FetchAsync(_opt.Remote, ct);
-        if (!_git.IsClean())
-            return new SaveResult { Ok = false, Message = "The control-repo clone has uncommitted changes. Commit or discard them, then retry." };
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
 
-        try
-        {
-            await _git.SyncBranchToRemoteAsync(_opt.Remote, _opt.MainBranch, ct);
-        }
-        catch (GitException ex)
-        {
-            return new SaveResult { Ok = false, Message = $"Could not fast-forward '{_opt.MainBranch}' to the remote: {ex.Message}" };
-        }
+        var manifestFull = Path.Combine(_opt.ControlRepoPath, ManifestPath);
+        if (!File.Exists(manifestFull)) return Fail($"{ManifestPath} not found in the clone after sync.");
 
-        var repoRoot = _opt.ControlRepoPath;
-        var manifestFull = Path.Combine(repoRoot, ManifestPath);
-        if (!File.Exists(manifestFull))
-            return new SaveResult { Ok = false, Message = $"{ManifestPath} not found in the clone after sync." };
-
-        // Edit the manifest as a DOM so only "target" changes; every other field is preserved.
+        // Edit the manifest as a DOM so only the fields we touch change; the rest is preserved.
         var root = JsonNode.Parse(File.ReadAllText(manifestFull), NodeOpts) as JsonObject
                    ?? throw new InvalidOperationException("manifest.json is not a JSON object.");
         if (root["programs"] is not JsonArray progs)
-            return new SaveResult { Ok = false, Message = "manifest.json has no 'programs' array." };
+            return Fail("manifest.json has no 'programs' array.");
 
-        // Write human-readable hostnames into the manifest (the UI sends stable machine ids;
-        // we translate them to the machine's hostname so manifest.json stays readable).
-        var hostById = HostnamesById();
+        var hostById = HostnamesById();   // machine id -> hostname (for readable targets)
         var byId = req.ProgramTargets.ToDictionary(t => t.Id, StringComparer.OrdinalIgnoreCase);
         foreach (var prog in progs.OfType<JsonObject>())
         {
             var id = prog["id"]?.GetValue<string>();
             if (id is null || !byId.TryGetValue(id, out var t)) continue;   // only touch programs the UI sent
-
-            if (t.All)
-            {
-                prog.Remove("target");   // applies to all machines (including future ones)
-            }
-            else
-            {
-                var tokens = t.MachineIds
-                    .Select(mid => hostById.TryGetValue(mid, out var host) ? host : mid)   // id -> hostname (fallback: id)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                var arr = new JsonArray();
-                foreach (var tok in tokens) arr.Add(tok);
-                prog["target"] = tokens.Count == 1 ? JsonValue.Create(tokens[0]) : arr;   // single -> plain string, else array
-            }
+            ApplyTargeting(prog, t, hostById);
         }
         root["lastUpdated"] = DateTimeOffset.UtcNow.ToString("O");   // stamp the edit
         File.WriteAllText(manifestFull, root.ToJsonString(JsonWrite));
 
         // fleet.json: friendly labels (console-owned).
-        var fleetFull = Path.Combine(repoRoot, FleetLabelsPath);
+        var fleetFull = Path.Combine(_opt.ControlRepoPath, FleetLabelsPath);
         var labelObj = new JsonObject();
         foreach (var kv in req.Labels)
             if (!string.IsNullOrWhiteSpace(kv.Value)) labelObj[kv.Key] = kv.Value;
@@ -233,14 +227,177 @@ public sealed class ControlRepo
         {
             var sha = await _git.CommitAndPushAsync(
                 _opt.Remote, _opt.MainBranch,
-                $"console: update targeting/labels ({DateTimeOffset.UtcNow:u})",
+                $"console: update programs/targeting/labels ({DateTimeOffset.UtcNow:u})",
                 new[] { ManifestPath, FleetLabelsPath }, ct);
             return new SaveResult { Ok = true, Message = "Saved and pushed.", Commit = sha };
         }
         catch (GitException ex)
         {
-            return new SaveResult { Ok = false, Message = $"Commit/push failed (the remote may have moved — reload and retry): {ex.Message}" };
+            return Fail($"Commit/push failed (the remote may have moved — reload and retry): {ex.Message}");
         }
+    }
+
+    /// <summary>Add a new program to the manifest (optionally importing a local file) and push.</summary>
+    public async Task<SaveResult> AddProgramAsync(AddRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Name)) return Fail("Program name is required.");
+        var validTypes = new[] { "exe", "batch", "powershell", "vbs", "python" };
+        if (!validTypes.Contains(req.Type, StringComparer.OrdinalIgnoreCase))
+            return Fail($"Type must be one of: {string.Join(", ", validTypes)}.");
+
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
+
+        var repoRoot = _opt.ControlRepoPath;
+        var manifestFull = Path.Combine(repoRoot, ManifestPath);
+        if (!File.Exists(manifestFull)) return Fail($"{ManifestPath} not found.");
+        var root = JsonNode.Parse(File.ReadAllText(manifestFull), NodeOpts) as JsonObject
+                   ?? throw new InvalidOperationException("manifest.json is not a JSON object.");
+        if (root["programs"] is not JsonArray progs) return Fail("manifest.json has no 'programs' array.");
+
+        var existing = progs.OfType<JsonObject>()
+            .Select(p => p["id"]?.GetValue<string>()).Where(x => x is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+        var slug = Slug(req.Name);
+        var id = UniqueId(slug, existing!);
+        var version = string.IsNullOrWhiteSpace(req.Version) ? "1.0" : req.Version.Trim();
+
+        // Resolve the file: import a local file into the repo, or reference an existing repo path.
+        string path, fileName;
+        string? checksum = null;
+        var toCommit = new List<string> { ManifestPath };
+        if (string.Equals(req.SourceMode, "path", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(req.RepoPath)) return Fail("Repo path is required.");
+            path = req.RepoPath.TrimStart('/');
+            fileName = string.IsNullOrWhiteSpace(req.FileName) ? Path.GetFileName(path) : req.FileName!.Trim();
+            var full = Path.Combine(repoRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(full)) checksum = "sha256:" + Sha256Hex(full);
+        }
+        else   // import a local file
+        {
+            if (string.IsNullOrWhiteSpace(req.LocalFilePath) || !File.Exists(req.LocalFilePath))
+                return Fail($"Local file not found: {req.LocalFilePath ?? "<empty>"}");
+            fileName = string.IsNullOrWhiteSpace(req.FileName) ? Path.GetFileName(req.LocalFilePath!) : req.FileName!.Trim();
+            path = $"programs/{slug}/v{version}/{fileName}";
+            var dest = Path.Combine(repoRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(req.LocalFilePath!, dest, overwrite: true);
+            checksum = "sha256:" + Sha256Hex(dest);
+            toCommit.Add(path);
+        }
+
+        var entry = new JsonObject
+        {
+            ["id"] = id,
+            ["name"] = req.Name.Trim(),
+            ["description"] = req.Description?.Trim() ?? "",
+            ["version"] = version,
+            ["status"] = "active",
+            ["type"] = req.Type.ToLowerInvariant(),
+            ["path"] = path,
+            ["installPath"] = string.IsNullOrWhiteSpace(req.InstallPath) ? $@"C:\Windows\Orch\programs\{slug}" : req.InstallPath!.Trim(),
+            ["fileName"] = fileName,
+            ["runAtStartup"] = req.RunAtStartup,
+            ["runAsAdmin"] = req.RunAsAdmin,
+            ["runOnce"] = req.RunOnce
+        };
+        if (checksum is not null) entry["checksum"] = checksum;
+        if (!string.IsNullOrWhiteSpace(req.Arguments)) entry["arguments"] = req.Arguments.Trim();
+        if (!req.All)   // targeted at specific machines from the start
+        {
+            var hostById = HostnamesById();
+            var tokens = req.MachineIds.Select(mid => hostById.TryGetValue(mid, out var h) ? h : mid)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (tokens.Count == 1) entry["target"] = JsonValue.Create(tokens[0]);
+            else if (tokens.Count > 1) { var arr = new JsonArray(); foreach (var tk in tokens) arr.Add(tk); entry["target"] = arr; }
+        }
+
+        progs.Add(entry);
+        root["lastUpdated"] = DateTimeOffset.UtcNow.ToString("O");
+        File.WriteAllText(manifestFull, root.ToJsonString(JsonWrite));
+
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(
+                _opt.Remote, _opt.MainBranch, $"console: add program {id} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
+            return new SaveResult { Ok = true, Message = $"Added {id}.", Commit = sha };
+        }
+        catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
+    // ---- edit helpers ------------------------------------------------------------------
+
+    /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.</summary>
+    private async Task<string?> PrepareCleanMainAsync(CancellationToken ct)
+    {
+        await _git.FetchAsync(_opt.Remote, ct);
+        if (!_git.IsClean())
+            return "The control-repo clone has uncommitted changes. Commit or discard them, then retry.";
+        try { await _git.SyncBranchToRemoteAsync(_opt.Remote, _opt.MainBranch, ct); }
+        catch (GitException ex) { return $"Could not fast-forward '{_opt.MainBranch}' to the remote: {ex.Message}"; }
+        return null;
+    }
+
+    /// <summary>
+    /// Set a program's status + target from a UI selection: any selection (All, or one or more
+    /// machines) => active; no selection => deleted (so ticking a deleted program re-activates it).
+    /// </summary>
+    private static void ApplyTargeting(JsonObject prog, ProgramTarget t, Dictionary<string, string> hostById)
+    {
+        var active = t.All || t.MachineIds.Count > 0;
+        if (!active)
+        {
+            prog["status"] = "deleted";                                   // no machines -> remove everywhere
+            prog.Remove("target");
+            prog["deletedDate"] = DateTimeOffset.UtcNow.ToString("O");
+            if (prog["reason"] is null) prog["reason"] = "Deactivated via console";
+            return;
+        }
+
+        prog["status"] = "active";                                        // (re)activate
+        prog.Remove("deletedDate");
+        prog.Remove("reason");
+        if (t.All)
+        {
+            prog.Remove("target");                                        // all machines (incl. future ones)
+        }
+        else
+        {
+            var tokens = t.MachineIds
+                .Select(mid => hostById.TryGetValue(mid, out var host) ? host : mid)   // id -> hostname
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var arr = new JsonArray();
+            foreach (var tok in tokens) arr.Add(tok);
+            prog["target"] = tokens.Count == 1 ? JsonValue.Create(tokens[0]) : arr;
+        }
+    }
+
+    private static SaveResult Fail(string message) => new() { Ok = false, Message = message };
+
+    private static string Slug(string name)
+    {
+        var s = new string(name.Trim().ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray());
+        while (s.Contains("--")) s = s.Replace("--", "-");
+        s = s.Trim('-');
+        return string.IsNullOrEmpty(s) ? "program" : s;
+    }
+
+    private static string UniqueId(string slug, HashSet<string> existing)
+    {
+        for (var i = 1; i < 1000; i++)
+        {
+            var id = $"{slug}-{i:000}";
+            if (!existing.Contains(id)) return id;
+        }
+        return $"{slug}-{Guid.NewGuid():N}";
+    }
+
+    private static string Sha256Hex(string filePath)
+    {
+        using var fs = File.OpenRead(filePath);
+        return Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
     }
 
     // ---- mapping helpers ---------------------------------------------------------------
