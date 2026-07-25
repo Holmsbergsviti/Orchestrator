@@ -40,6 +40,14 @@ public sealed class ProgramView
     public bool AllMachines { get; set; }
     /// <summary>Machine ids/hostnames this program is explicitly targeted at (raw manifest tokens).</summary>
     public List<string> Target { get; set; } = new();
+    // Editable settings (shown pre-filled in the console).
+    public string? Type { get; set; }
+    public string? InstallPath { get; set; }
+    public string? Arguments { get; set; }
+    public string? Description { get; set; }
+    public bool RunAtStartup { get; set; }
+    public bool RunAsAdmin { get; set; }
+    public bool RunOnce { get; set; }
 }
 
 /// <summary>One machine as shown in the console (from its heartbeat + your label).</summary>
@@ -77,6 +85,21 @@ public sealed class ProgramTarget
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("all")] public bool All { get; set; }
     [JsonPropertyName("machineIds")] public List<string> MachineIds { get; set; } = new();
+    /// <summary>Optional per-program setting edits (null = leave settings untouched).</summary>
+    [JsonPropertyName("settings")] public ProgramSettings? Settings { get; set; }
+}
+
+/// <summary>Editable manifest fields for an existing program (all optional).</summary>
+public sealed class ProgramSettings
+{
+    [JsonPropertyName("version")] public string? Version { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; }
+    [JsonPropertyName("installPath")] public string? InstallPath { get; set; }
+    [JsonPropertyName("arguments")] public string? Arguments { get; set; }
+    [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("runAtStartup")] public bool? RunAtStartup { get; set; }
+    [JsonPropertyName("runAsAdmin")] public bool? RunAsAdmin { get; set; }
+    [JsonPropertyName("runOnce")] public bool? RunOnce { get; set; }
 }
 
 public sealed class SaveResult
@@ -345,6 +368,8 @@ public sealed class ControlRepo
     /// </summary>
     private static void ApplyTargeting(JsonObject prog, ProgramTarget t, Dictionary<string, string> hostById)
     {
+        if (t.Settings is not null) ApplySettings(prog, t.Settings);   // per-program flag/field edits
+
         var active = t.All || t.MachineIds.Count > 0;
         if (!active)
         {
@@ -372,6 +397,25 @@ public sealed class ControlRepo
             foreach (var tok in tokens) arr.Add(tok);
             prog["target"] = tokens.Count == 1 ? JsonValue.Create(tokens[0]) : arr;
         }
+    }
+
+    /// <summary>Write the editable manifest fields from a settings edit (only fields the UI provided).</summary>
+    private static void ApplySettings(JsonObject prog, ProgramSettings s)
+    {
+        if (s.RunAtStartup is bool ras) prog["runAtStartup"] = ras;
+        if (s.RunAsAdmin is bool raa) prog["runAsAdmin"] = raa;
+        if (s.RunOnce is bool ro) prog["runOnce"] = ro;
+        if (!string.IsNullOrWhiteSpace(s.Version)) prog["version"] = s.Version!.Trim();
+        if (!string.IsNullOrWhiteSpace(s.Type)) prog["type"] = s.Type!.Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(s.InstallPath)) prog["installPath"] = s.InstallPath!.Trim();
+        SetOrRemove(prog, "arguments", s.Arguments);
+        SetOrRemove(prog, "description", s.Description);
+    }
+
+    private static void SetOrRemove(JsonObject o, string key, string? val)
+    {
+        if (string.IsNullOrWhiteSpace(val)) o.Remove(key);
+        else o[key] = val.Trim();
     }
 
     private static SaveResult Fail(string message) => new() { Ok = false, Message = message };
@@ -449,14 +493,24 @@ public sealed class ControlRepo
                   || target.Any(t => string.Equals(t, "all", StringComparison.OrdinalIgnoreCase));
         return new ProgramView
         {
-            Id = prog["id"]?.GetValue<string>() ?? "",
-            Name = prog["name"]?.GetValue<string>() ?? prog["id"]?.GetValue<string>() ?? "",
-            Version = prog["version"]?.GetValue<string>(),
-            Status = prog["status"]?.GetValue<string>() ?? "active",
+            Id = GetStr(prog, "id") ?? "",
+            Name = GetStr(prog, "name") ?? GetStr(prog, "id") ?? "",
+            Version = GetStr(prog, "version"),
+            Status = GetStr(prog, "status") ?? "active",
             AllMachines = all,
-            Target = target ?? new List<string>()
+            Target = target ?? new List<string>(),
+            Type = GetStr(prog, "type"),
+            InstallPath = GetStr(prog, "installPath"),
+            Arguments = GetStr(prog, "arguments"),
+            Description = GetStr(prog, "description"),
+            RunAtStartup = GetBool(prog, "runAtStartup"),
+            RunAsAdmin = GetBool(prog, "runAsAdmin"),
+            RunOnce = GetBool(prog, "runOnce")
         };
     }
+
+    private static bool GetBool(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
+    private static string? GetStr(JsonObject o, string key) => o[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     /// <summary>Read the manifest "target" (string or array) into a list.</summary>
     private static List<string>? ReadTarget(JsonNode? node) => node switch

@@ -73,6 +73,10 @@
     .allrow { display: flex; align-items: center; gap: 8px; margin: 6px 0 12px; font-size: 13px; }
     .checklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 7px 16px; }
     .checklist label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .cfg { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+    .cfglabel { font-size: 12px; font-weight: 600; margin-bottom: 10px; }
+    .cfggrid { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; align-items: center; max-width: 520px; margin-top: 12px; }
+    .cfggrid > label { font-size: 13px; }
     .scroll { overflow-x: auto; }
     .matrix th.mcol { text-align: center; white-space: nowrap; }
     .matrix td.cell { text-align: center; }
@@ -245,7 +249,13 @@
       // Working selection per program: an "all" flag + a Set of machineIds.
       // Deleted programs start unmarked; ticking a box re-activates them on save.
       state.sel = {};
+      state.settings = {};
       for (const p of state.programs) {
+        state.settings[p.id] = {
+          version: p.version || '', type: p.type || 'exe',
+          installPath: p.installPath || '', arguments: p.arguments || '', description: p.description || '',
+          runAtStartup: !!p.runAtStartup, runAsAdmin: !!p.runAsAdmin, runOnce: !!p.runOnce
+        };
         const isActive = (p.status || 'active').toLowerCase() === 'active';
         if (!isActive) { state.sel[p.id] = { all: false, ids: new Set() }; continue; }
         const checked = new Set(state.machines.filter(m => applies(p, m)).map(m => m.machineId));
@@ -374,9 +384,40 @@
           grid.append(el('label', {}, [ cb, el('span', { className: 'dot ' + (m.online ? 'on' : 'off') }), document.createTextNode(m.label || m.hostname) ]));
         }
         body.append(grid);
+        body.append(settingsEditor(p));
         item.append(body);
         host.append(item);
       }
+    }
+
+    // Per-program settings editor (runAtStartup/runAsAdmin/runOnce + fields). Edits go to state.settings.
+    function settingsEditor(p) {
+      const st = state.settings[p.id];
+      const set = (k, v) => { st[k] = v; markDirty(); };
+      const cfg = el('div', { className: 'cfg' });
+      cfg.append(el('div', { className: 'cfglabel', textContent: 'Settings' }));
+
+      const flags = el('div', { className: 'flags' });
+      const flag = (k, label) => el('label', {}, [
+        el('input', { type: 'checkbox', checked: st[k], onchange: e => set(k, e.target.checked) }),
+        document.createTextNode(' ' + label)
+      ]);
+      flags.append(flag('runAtStartup', 'runAtStartup'), flag('runAsAdmin', 'runAsAdmin'), flag('runOnce', 'runOnce'));
+      cfg.append(flags);
+
+      const g = el('div', { className: 'cfggrid' });
+      const typeSel = el('select', { className: 'fld', onchange: e => set('type', e.target.value) });
+      for (const tp of ['exe', 'batch', 'powershell', 'vbs', 'python']) {
+        const o = el('option', { value: tp, textContent: tp }); if (st.type === tp) o.selected = true; typeSel.append(o);
+      }
+      const fld = (k, ph) => el('input', { className: 'fld', value: st[k] || '', placeholder: ph || '', oninput: e => set(k, e.target.value) });
+      g.append(el('label', { className: 'muted', textContent: 'Type' }), typeSel);
+      g.append(el('label', { className: 'muted', textContent: 'Version' }), fld('version'));
+      g.append(el('label', { className: 'muted', textContent: 'Install path' }), fld('installPath'));
+      g.append(el('label', { className: 'muted', textContent: 'Arguments' }), fld('arguments', '(optional)'));
+      g.append(el('label', { className: 'muted', textContent: 'Description' }), fld('description', '(optional)'));
+      cfg.append(g);
+      return cfg;
     }
 
     // Each machine is an expandable row; expand to tick which programs run on it.
@@ -419,7 +460,8 @@
     async function save() {
       const body = {
         programTargets: state.programs.map(p => ({
-          id: p.id, all: state.sel[p.id].all, machineIds: [...state.sel[p.id].ids]
+          id: p.id, all: state.sel[p.id].all, machineIds: [...state.sel[p.id].ids],
+          settings: state.settings[p.id]
         })),
         labels: {}
       };
