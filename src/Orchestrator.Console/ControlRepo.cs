@@ -386,6 +386,59 @@ public sealed class ControlRepo
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
     }
 
+    /// <summary>Remove a program from the manifest entirely (and its repo file), then push.
+    /// Machines that have it uninstall it on their next sync; machines that never had it are unaffected.</summary>
+    public async Task<SaveResult> DeleteProgramAsync(string programId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(programId)) return Fail("Program id is required.");
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
+
+        var repoRoot = _opt.ControlRepoPath;
+        var manifestFull = Path.Combine(repoRoot, ManifestPath);
+        if (!File.Exists(manifestFull)) return Fail($"{ManifestPath} not found.");
+        var root = JsonNode.Parse(File.ReadAllText(manifestFull), NodeOpts) as JsonObject
+                   ?? throw new InvalidOperationException("manifest.json is not a JSON object.");
+        if (root["programs"] is not JsonArray progs) return Fail("manifest.json has no 'programs' array.");
+
+        // Find and remove the program object.
+        var idx = -1;
+        JsonObject? match = null;
+        for (var i = 0; i < progs.Count; i++)
+        {
+            if (progs[i] is JsonObject o &&
+                string.Equals(o["id"]?.GetValue<string>(), programId, StringComparison.OrdinalIgnoreCase))
+            { match = o; idx = i; break; }
+        }
+        if (match is null || idx < 0) return Fail($"Program '{programId}' not found.");
+
+        var relPath = match["path"]?.GetValue<string>();   // its file in the repo, if any
+        progs.RemoveAt(idx);
+        root["lastUpdated"] = DateTimeOffset.UtcNow.ToString("O");
+        File.WriteAllText(manifestFull, root.ToJsonString(JsonWrite));
+
+        var toCommit = new List<string> { ManifestPath };
+        // Also remove the program's file from the repo (only a safe, repo-relative path).
+        if (!string.IsNullOrWhiteSpace(relPath) && !relPath.Contains("..") && !Path.IsPathRooted(relPath))
+        {
+            var full = Path.Combine(repoRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(full))
+            {
+                try { File.Delete(full); toCommit.Add(relPath); }
+                catch (Exception ex) { _log.LogWarning(ex, "Could not delete repo file {Path}", relPath); }
+            }
+        }
+
+        if (_git.IsClean()) return new SaveResult { Ok = true, Message = "Nothing to delete.", Commit = null };
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: delete program {programId} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
+            return new SaveResult { Ok = true, Message = "Deleted — machines uninstall it on their next sync.", Commit = sha };
+        }
+        catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
     // ---- edit helpers ------------------------------------------------------------------
 
     /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.</summary>

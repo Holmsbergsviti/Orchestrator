@@ -65,6 +65,12 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   program on that machine. The **All** toggle per program means "every machine, including
   ones that report in later" (it clears the program's `target`); turn it off to pick an
   explicit set.
+- **Delete program** (in a program's Settings) — removes the entry from the manifest
+  entirely (and its file from the repo) and pushes. Every machine that has it uninstalls
+  it on the next sync; machines that never had it are unaffected. This is the hard delete —
+  different from unticking all machines, which just deactivates it but keeps a `deleted` row.
+- **Run now** (in Settings) — runs the program once on each targeted machine's next sync, in
+  the logged-in user's session.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.

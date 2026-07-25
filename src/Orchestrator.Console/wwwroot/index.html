@@ -28,6 +28,8 @@
              padding: 7px 14px; border-radius: 8px; cursor: pointer; }
     button:hover { border-color: #cbd0d6; }
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.danger { color: var(--err); border-color: #fecaca; }
+    button.danger:hover { background: var(--errbg); border-color: var(--err); }
     button.primary:disabled { opacity: .5; cursor: default; }
     main { padding: 20px; max-width: 1100px; margin: 0 auto; }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
@@ -408,7 +410,10 @@
       const runBtn = el('button', { type: 'button', textContent: 'Run now',
         title: 'Run this program once on each targeted machine, in the logged-in user session',
         onclick: () => runNow(p) });
-      flags.append(runBtn);
+      const delBtn = el('button', { type: 'button', className: 'danger', textContent: 'Delete program',
+        title: 'Remove from the manifest entirely and uninstall from every machine',
+        onclick: () => deleteProgram(p) });
+      flags.append(runBtn, delBtn);
       cfg.append(flags);
 
       const g = el('div', { className: 'cfggrid' });
@@ -539,6 +544,19 @@
         }
       } catch (e) { toast('Add failed: ' + e.message, true); btn.disabled = false; }
     }
+    // Delete a program entirely (removes it from the manifest + repo; uninstalls fleet-wide).
+    async function deleteProgram(p) {
+      if (!confirm(`Delete "${p.name}" (${p.id}) entirely?\n\nIt's removed from the manifest and uninstalled from every machine on its next sync. This can't be undone from here.`)) return;
+      try {
+        const r = await fetch('/api/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) { toast(res.commit ? `Deleted · ${res.commit}` : (res.message || 'Deleted')); await load(); }
+        else { toast('Delete failed: ' + (res.message || res.detail || 'unknown error'), true); }
+      } catch (e) { toast('Delete failed: ' + e.message, true); }
+    }
+
     // Fire a one-time "run now" for a program (pushes a fresh runRequest token).
     async function runNow(p) {
       if (!confirm(`Run "${p.name}" now on all machines it's targeted at?`)) return;
