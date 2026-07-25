@@ -540,9 +540,9 @@
           await load();
         } else {
           toast('Add failed: ' + (res.message || res.detail || 'unknown error'), true);
-          btn.disabled = false;
         }
-      } catch (e) { toast('Add failed: ' + e.message, true); btn.disabled = false; }
+      } catch (e) { toast('Add failed: ' + e.message, true); }
+      finally { btn.disabled = false; }   // always re-enable, including after a successful add
     }
     // Delete a program entirely (removes it from the manifest + repo; uninstalls fleet-wide).
     async function deleteProgram(p) {
