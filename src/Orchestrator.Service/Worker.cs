@@ -35,6 +35,11 @@ public sealed class Worker : BackgroundService   // BackgroundService = a long-r
         _log.LogInformation("Orchestrator started. MachineID={MachineId} Host={Host} Repo={Owner}/{Repo}@{Branch} Interval={Min}min",
             machine.MachineId, machine.Hostname, _config.RepoOwner, _config.RepoName, _config.Branch, _config.SyncIntervalMinutes);  // log the startup details
 
+        // Log the exe's build time so you can confirm which build is actually running.
+        var exe = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
+            _log.LogInformation("Build: exe {Exe} built {BuiltUtc:u}", exe, File.GetLastWriteTimeUtc(exe));
+
         var interval = TimeSpan.FromMinutes(Math.Max(1, _config.SyncIntervalMinutes));  // wait time between syncs (at least 1 minute)
 
         while (!stoppingToken.IsCancellationRequested)  // keep looping until the service is asked to stop
