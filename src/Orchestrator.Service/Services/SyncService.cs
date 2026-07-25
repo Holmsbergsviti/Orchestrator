@@ -244,13 +244,14 @@ public sealed class SyncService : ISyncService   // the actual implementation
 
         try
         {
+            var cmd = LaunchCommandBuilder.Build(p);   // proper interpreter per type (.ps1 -> powershell, .bat -> cmd, ...)
             var psi = new ProcessStartInfo   // set up how to launch the program
             {
-                FileName = p.FullFilePath,                 // the program to run
-                Arguments = p.Arguments ?? string.Empty,   // its arguments (if any)
-                UseShellExecute = true,                    // launch via the shell
-                WindowStyle = ProcessWindowStyle.Hidden,   // don't show a window
-                WorkingDirectory = p.InstallPath           // run from its install folder
+                FileName = cmd.Executable,                 // the interpreter (or the exe itself)
+                Arguments = cmd.Arguments,                 // the file + its arguments
+                UseShellExecute = false,                   // run it directly (ShellExecute can't "run" a .ps1)
+                CreateNoWindow = true,                     // no console window
+                WorkingDirectory = Directory.Exists(p.InstallPath) ? p.InstallPath : string.Empty  // run from its folder if present
             };
             Process.Start(psi);                            // launch it (runs as SYSTEM; non-interactive)
             machine.CompletedRunOnce.Add(p.Id);            // mark it as done on this machine...
