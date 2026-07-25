@@ -130,6 +130,10 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 _manifests.SaveChecksumCache(checksumCache);   // save the updated fingerprints
                 _manifests.SaveLocalManifest(effective);       // remember THIS machine's applied view as the new baseline
 
+                // Honor any pending "run now" requests for programs active on this machine.
+                foreach (var p in effective.ActivePrograms)
+                    MaybeRunRequest(p);
+
                 record.Success = record.Errors.Count == 0;     // success only if nothing errored
             }
         }
@@ -204,8 +208,8 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 _startup.Remove(p);     // make sure it's NOT set to launch at startup
         }
 
-        if (p.RunOnce)         // marked run-once?
-            MaybeRunOnce(p);   // run it now if it hasn't run on this machine yet
+        if (p.RunOnceInstalled)     // marked run-once-on-install?
+            MaybeRunOnceInstalled(p);   // run it now if it hasn't run on this machine yet
     }
 
     private void DeleteProgram(ProgramEntry p, Dictionary<string, string> checksumCache)
@@ -231,7 +235,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
     }
 
     [SupportedOSPlatform("windows")]   // this method uses Windows-only process launching
-    private void MaybeRunOnce(ProgramEntry p)
+    private void MaybeRunOnceInstalled(ProgramEntry p)
     {
         if (!OperatingSystem.IsWindows()) return;   // safety guard: do nothing off Windows
 
@@ -248,14 +252,38 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 WindowStyle = ProcessWindowStyle.Hidden,   // don't show a window
                 WorkingDirectory = p.InstallPath           // run from its install folder
             };
-            Process.Start(psi);                            // launch it
+            Process.Start(psi);                            // launch it (runs as SYSTEM; non-interactive)
             machine.CompletedRunOnce.Add(p.Id);            // mark it as done on this machine...
             _configService.SaveMachineConfig(machine);     // ...and persist that so it won't run again
-            _log.LogInformation("Executed runOnce program {Name}", p.Name);
+            _log.LogInformation("Executed runOnceInstalled program {Name}", p.Name);
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "runOnce launch failed for {Name}", p.Name);   // log a launch failure
+            _log.LogError(ex, "runOnceInstalled launch failed for {Name}", p.Name);   // log a launch failure
+        }
+    }
+
+    /// <summary>Honor a "run now" request: if the program's runRequest token is new for this
+    /// machine, run it once in the interactive user's session, then remember the token.</summary>
+    private void MaybeRunRequest(ProgramEntry p)
+    {
+        if (string.IsNullOrEmpty(p.RunRequest)) return;   // no pending request
+        if (!OperatingSystem.IsWindows()) return;          // interactive run is Windows-only
+        if (!File.Exists(p.FullFilePath)) return;          // not installed yet -> nothing to run
+
+        var machine = _configService.LoadOrCreateMachineConfig();
+        if (machine.CompletedRunRequests.TryGetValue(p.Id, out var done) && done == p.RunRequest)
+            return;   // this exact request already ran here
+
+        try
+        {
+            _startup.RunInteractiveOnce(p);                              // schedule the interactive one-time run
+            machine.CompletedRunRequests[p.Id] = p.RunRequest;          // remember this token...
+            _configService.SaveMachineConfig(machine);                  // ...so it runs only once
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "run-now failed for {Name}", p.Name);
         }
     }
 

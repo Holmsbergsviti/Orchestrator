@@ -8,6 +8,7 @@
 // =====================================================================================
 
 using System.Diagnostics;             // for running schtasks.exe as a child process
+using System.Management;              // WMI: find the logged-on interactive user
 using System.Runtime.Versioning;      // for the [SupportedOSPlatform] Windows-only marker
 using System.Security;                // for SecurityElement.Escape (XML escaping)
 using System.Text;                    // for StringBuilder and UnicodeEncoding
@@ -23,6 +24,9 @@ public interface IScheduledTaskService   // the contract for scheduled-task hand
 
     /// <summary>Delete a program's Scheduled Task if it exists. Tolerates a missing task.</summary>
     void RemoveStartupTask(ProgramEntry program);
+
+    /// <summary>Run a program ONCE, soon, in the interactive logged-on user's session (for "run now").</summary>
+    void RunInteractiveOnce(ProgramEntry program);
 }
 
 /// <summary>
@@ -82,6 +86,55 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         else if (!output.Contains("cannot find", StringComparison.OrdinalIgnoreCase) &&   // it failed, but not just because...
                  !output.Contains("does not exist", StringComparison.OrdinalIgnoreCase))  // ...the task was already gone
             _log.LogWarning("schtasks /Delete for {Task} returned {Code}: {Output}", TaskName(program), code, output);  // a real problem -> warn
+    }
+
+    public void RunInteractiveOnce(ProgramEntry program)
+    {
+        var user = GetInteractiveUser();
+        if (string.IsNullOrWhiteSpace(user))
+        {
+            _log.LogWarning("run-now '{Name}': no interactive user is logged on — cannot run it visibly; skipping", program.Name);
+            return;   // nothing to attach an interactive process to
+        }
+
+        var cmd = LaunchCommandBuilder.Build(program);          // the actual program launch command
+        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
+        var taskName = _config.RegistryEntryPrefix + "runnow_" + program.Id;   // e.g. Orch_runnow_sixseven-001
+        var xml = BuildInteractiveRunOnceXml(program, cmd.Executable, cmd.Arguments, user, start);
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"orch-runnow-{Guid.NewGuid():N}.xml");
+        File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        try
+        {
+            var (code, output) = RunSchtasks("/Create", "/TN", taskName, "/XML", tmp, "/F");
+            if (code != 0)
+                throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
+            _log.LogInformation("run-now '{Name}': scheduled interactive run as {User} at {Time:HH:mm:ss}", program.Name, user, start);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>The user logged on to the interactive console session, e.g. "PC\\Alice"; null if none.</summary>
+    private string? GetInteractiveUser()
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT UserName FROM Win32_ComputerSystem");
+            foreach (var o in searcher.Get())
+            {
+                using var mo = o;
+                var user = mo["UserName"] as string;
+                if (!string.IsNullOrWhiteSpace(user)) return user;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not determine the interactive user");
+        }
+        return null;
     }
 
     private (int ExitCode, string Output) RunSchtasks(params string[] args)
@@ -159,6 +212,65 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         sb.AppendLine("  </Actions>");
         sb.Append("</Task>");   // close the root element (no trailing newline)
         return sb.ToString();   // return the finished XML text
+    }
+
+    /// <summary>
+    /// Build a Task Scheduler 1.2 XML doc that runs a command ONCE at <paramref name="start"/> in the
+    /// given user's interactive session (InteractiveToken = no password), then deletes itself. Pure/testable.
+    /// </summary>
+    public static string BuildInteractiveRunOnceXml(ProgramEntry program, string execCommand, string execArguments, string userId, DateTime start)
+    {
+        var description = Esc($"Orchestrator one-time interactive run of {program.Name}");
+        var command = Esc(execCommand);
+        var arguments = Esc(execArguments);
+        var workingDir = Esc(program.InstallPath);
+        var user = Esc(userId);
+        var startB = start.ToString("yyyy-MM-ddTHH:mm:ss");           // local time, no zone
+        var endB = start.AddMinutes(10).ToString("yyyy-MM-ddTHH:mm:ss");
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-16\"?>");
+        sb.AppendLine("<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">");
+        sb.AppendLine("  <RegistrationInfo>");
+        sb.AppendLine($"    <Description>{description}</Description>");
+        sb.AppendLine("    <Author>GitHubOrchestrator</Author>");
+        sb.AppendLine("  </RegistrationInfo>");
+        sb.AppendLine("  <Triggers>");
+        sb.AppendLine("    <TimeTrigger>");
+        sb.AppendLine($"      <StartBoundary>{startB}</StartBoundary>");   // fire once, shortly from now
+        sb.AppendLine($"      <EndBoundary>{endB}</EndBoundary>");         // needed so the task can auto-delete
+        sb.AppendLine("      <Enabled>true</Enabled>");
+        sb.AppendLine("    </TimeTrigger>");
+        sb.AppendLine("  </Triggers>");
+        sb.AppendLine("  <Principals>");
+        sb.AppendLine("    <Principal id=\"Author\">");
+        sb.AppendLine($"      <UserId>{user}</UserId>");                  // the logged-on interactive user
+        sb.AppendLine("      <LogonType>InteractiveToken</LogonType>");   // use their session token; no password
+        sb.AppendLine("      <RunLevel>LeastPrivilege</RunLevel>");
+        sb.AppendLine("    </Principal>");
+        sb.AppendLine("  </Principals>");
+        sb.AppendLine("  <Settings>");
+        sb.AppendLine("    <MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>");
+        sb.AppendLine("    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
+        sb.AppendLine("    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
+        sb.AppendLine("    <StartWhenAvailable>true</StartWhenAvailable>");
+        sb.AppendLine("    <AllowStartOnDemand>true</AllowStartOnDemand>");
+        sb.AppendLine("    <Enabled>true</Enabled>");
+        sb.AppendLine("    <Hidden>false</Hidden>");
+        sb.AppendLine("    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>");   // self-clean after it expires
+        sb.AppendLine("    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>");
+        sb.AppendLine("  </Settings>");
+        sb.AppendLine("  <Actions Context=\"Author\">");
+        sb.AppendLine("    <Exec>");
+        sb.AppendLine($"      <Command>{command}</Command>");
+        if (!string.IsNullOrEmpty(arguments))
+            sb.AppendLine($"      <Arguments>{arguments}</Arguments>");
+        if (!string.IsNullOrEmpty(workingDir))
+            sb.AppendLine($"      <WorkingDirectory>{workingDir}</WorkingDirectory>");
+        sb.AppendLine("    </Exec>");
+        sb.AppendLine("  </Actions>");
+        sb.Append("</Task>");
+        return sb.ToString();
     }
 
     private static string Esc(string? value) =>   // make a string safe to drop into XML

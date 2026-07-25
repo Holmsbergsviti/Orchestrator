@@ -78,8 +78,15 @@ public sealed class ProgramEntry
     [JsonPropertyName("runAsAdmin")]                  // maps JSON "runAsAdmin"
     public bool RunAsAdmin { get; set; }              // true = start elevated (via Scheduled Task) instead of a Run entry
 
-    [JsonPropertyName("runOnce")]                     // maps JSON "runOnce"
-    public bool RunOnce { get; set; }                 // true = run it once right after install
+    [JsonPropertyName("runOnceInstalled")]            // maps JSON "runOnceInstalled" (was "runOnce")
+    public bool RunOnceInstalled { get; set; }        // true = run it once right after it's installed (non-interactive, SYSTEM)
+
+    /// <summary>
+    /// On-demand "run now" token. Whenever this value changes, each targeted machine runs the
+    /// program once (in the interactive user session) on its next sync. Set/rotated by the console.
+    /// </summary>
+    [JsonPropertyName("runRequest")]                  // maps JSON "runRequest"
+    public string? RunRequest { get; set; }           // a nonce; a new value triggers one interactive run
 
     [JsonPropertyName("deletedDate")]                 // maps JSON "deletedDate"
     public string? DeletedDate { get; set; }          // when it was marked deleted (for deleted entries)

@@ -32,7 +32,7 @@ interval (default 60 min).
      "arguments": "--silent",
      "runAtStartup": true,
      "runAsAdmin": false,
-     "runOnce": false
+     "runOnceInstalled": false
    }
    ```
 4. Commit + push.
@@ -99,7 +99,8 @@ By default every program installs on **every** machine. Add a `target` to scope 
 | `arguments` | no | Appended to the startup command. |
 | `runAtStartup` | no | Registers the program to launch at startup (mechanism depends on `runAsAdmin`). |
 | `runAsAdmin` | no | `false` → `HKLM\...\Run` entry (interactive user, non-elevated). `true` → Scheduled Task running as **SYSTEM** with highest privilege, at boot. |
-| `runOnce` | no | Executes once per machine right after install. |
+| `runOnceInstalled` | no | Runs once per machine right after install (as SYSTEM, non-interactive — not for UI/audio). |
+| `runRequest` | no | On-demand run token; change it (console **Run now**) to run once on each targeted machine in the **user session**. Use this for anything interactive. |
 | `deletedDate` | deleted | Timestamp for `status: deleted` entries. |
 | `reason` | deleted | Brief explanation for the removal. |
 

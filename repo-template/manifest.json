@@ -18,7 +18,7 @@
       "arguments": "--start-minimized",
       "runAtStartup": true,
       "runAsAdmin": false,
-      "runOnce": false,
+      "runOnceInstalled": false,
       "metadata": {
         "author": "IT Team",
         "purpose": "Daily backup of critical files"
@@ -37,7 +37,7 @@
       "fileName": "monitor.ps1",
       "runAtStartup": true,
       "runAsAdmin": true,
-      "runOnce": false
+      "runOnceInstalled": false
     },
     {
       "id": "sync-tool-001",
@@ -52,7 +52,7 @@
       "arguments": "full-sync",
       "runAtStartup": true,
       "runAsAdmin": false,
-      "runOnce": false,
+      "runOnceInstalled": false,
       "target": ["DESKTOP-ABC123", "olegs-laptop"]
     },
     {

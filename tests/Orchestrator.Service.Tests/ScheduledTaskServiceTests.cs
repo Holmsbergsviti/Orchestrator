@@ -70,4 +70,27 @@ public sealed class ScheduledTaskServiceTests
         var ex = Record.Exception(() => System.Xml.Linq.XDocument.Parse(body));  // try to parse it as XML
         Assert.Null(ex);                                               // no exception means it's well-formed
     }
+
+    [Fact]
+    public void BuildInteractiveRunOnceXml_RunsAsInteractiveUser_OnceThenSelfDeletes()
+    {
+        var xml = ScheduledTaskService.BuildInteractiveRunOnceXml(
+            TestData.Program("a", type: ProgramType.Batch, installPath: "s", fileName: "x.bat"),
+            "cmd.exe", "/c \"s\\x.bat\"", @"PC\Alice", new DateTime(2026, 7, 25, 10, 0, 0));
+
+        Assert.Contains(@"<UserId>PC\Alice</UserId>", xml);                   // the logged-on user
+        Assert.Contains("<LogonType>InteractiveToken</LogonType>", xml);     // their interactive session, no password
+        Assert.Contains("<TimeTrigger>", xml);                               // fires once, soon
+        Assert.Contains("<DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>", xml);  // self-cleans
+        Assert.Contains("<Command>cmd.exe</Command>", xml);                  // runs the program
+    }
+
+    [Fact]
+    public void BuildInteractiveRunOnceXml_IsWellFormedXml()
+    {
+        var xml = ScheduledTaskService.BuildInteractiveRunOnceXml(
+            TestData.Program("a", fileName: "app.exe"), @"C:\app.exe", "--x \"q\"", @"PC\Bob", DateTime.Now);
+        var body = xml[(xml.IndexOf('\n') + 1)..];
+        Assert.Null(Record.Exception(() => System.Xml.Linq.XDocument.Parse(body)));
+    }
 }

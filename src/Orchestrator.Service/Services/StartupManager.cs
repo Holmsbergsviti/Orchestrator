@@ -23,6 +23,9 @@ public interface IStartupManager   // the contract for startup registration rout
 
     /// <summary>Remove any startup registration for the program (both mechanisms).</summary>
     void Remove(ProgramEntry program);
+
+    /// <summary>Run the program once, soon, in the interactive user's session (for "run now").</summary>
+    void RunInteractiveOnce(ProgramEntry program);
 }
 
 /// <summary>
@@ -65,4 +68,7 @@ public sealed class StartupManager : IStartupManager
         _registry.RemoveStartup(program);    // remove the registry entry (if any)
         _tasks.RemoveStartupTask(program);   // and the scheduled task (if any)
     }
+
+    public void RunInteractiveOnce(ProgramEntry program)
+        => _tasks.RunInteractiveOnce(program);   // a one-time task in the interactive session
 }

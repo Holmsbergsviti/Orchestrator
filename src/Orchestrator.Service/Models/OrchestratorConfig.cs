@@ -79,7 +79,11 @@ public sealed class MachineConfig
     [JsonPropertyName("hostname")]                           // maps JSON "hostname"
     public string Hostname { get; set; } = string.Empty;     // this computer's name
 
-    /// <summary>Ids of runOnce programs already executed on this machine.</summary>
+    /// <summary>Ids of runOnceInstalled programs already executed on this machine.</summary>
     [JsonPropertyName("completedRunOnce")]                   // maps JSON "completedRunOnce"
-    public List<string> CompletedRunOnce { get; set; } = new();  // remembers which run-once programs already ran here
+    public List<string> CompletedRunOnce { get; set; } = new();  // remembers which run-once-on-install programs already ran here
+
+    /// <summary>Program id -> the last "runRequest" token already executed here (so each token runs once).</summary>
+    [JsonPropertyName("completedRunRequests")]               // maps JSON "completedRunRequests"
+    public Dictionary<string, string> CompletedRunRequests { get; set; } = new();  // remembers the last run-now token run per program
 }

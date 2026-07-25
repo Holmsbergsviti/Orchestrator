@@ -179,7 +179,7 @@
           <div class="flags">
             <label><input type="checkbox" id="a-startup" /> runAtStartup</label>
             <label><input type="checkbox" id="a-admin" /> runAsAdmin</label>
-            <label><input type="checkbox" id="a-once" /> runOnce</label>
+            <label><input type="checkbox" id="a-once" /> runOnceInstalled</label>
             <label><input type="checkbox" id="a-all" checked /> all machines</label>
           </div>
 
@@ -220,6 +220,7 @@
       if (!iso) return '—';
       const d = new Date(iso); if (isNaN(d)) return iso;
       const secs = Math.round((Date.now() - d.getTime()) / 1000);
+      if (secs < 30) return 'just now';   // includes small negatives from VM/host clock skew
       if (secs < 60) return secs + 's ago';
       if (secs < 3600) return Math.round(secs / 60) + 'm ago';
       if (secs < 86400) return Math.round(secs / 3600) + 'h ago';
@@ -254,7 +255,7 @@
         state.settings[p.id] = {
           version: p.version || '', type: p.type || 'exe',
           installPath: p.installPath || '', arguments: p.arguments || '', description: p.description || '',
-          runAtStartup: !!p.runAtStartup, runAsAdmin: !!p.runAsAdmin, runOnce: !!p.runOnce
+          runAtStartup: !!p.runAtStartup, runAsAdmin: !!p.runAsAdmin, runOnceInstalled: !!p.runOnceInstalled
         };
         const isActive = (p.status || 'active').toLowerCase() === 'active';
         if (!isActive) { state.sel[p.id] = { all: false, ids: new Set() }; continue; }
@@ -402,7 +403,12 @@
         el('input', { type: 'checkbox', checked: st[k], onchange: e => set(k, e.target.checked) }),
         document.createTextNode(' ' + label)
       ]);
-      flags.append(flag('runAtStartup', 'runAtStartup'), flag('runAsAdmin', 'runAsAdmin'), flag('runOnce', 'runOnce'));
+      flags.append(flag('runAtStartup', 'runAtStartup'), flag('runAsAdmin', 'runAsAdmin'), flag('runOnceInstalled', 'runOnceInstalled'));
+      // "Run now" — fires once on each targeted machine's next sync, in the user's session.
+      const runBtn = el('button', { type: 'button', textContent: 'Run now',
+        title: 'Run this program once on each targeted machine, in the logged-in user session',
+        onclick: () => runNow(p) });
+      flags.append(runBtn);
       cfg.append(flags);
 
       const g = el('div', { className: 'cfggrid' });
@@ -509,7 +515,7 @@
         arguments: $('#a-args').value.trim(),
         runAtStartup: $('#a-startup').checked,
         runAsAdmin: $('#a-admin').checked,
-        runOnce: $('#a-once').checked,
+        runOnceInstalled: $('#a-once').checked,
         all: $('#a-all').checked,
         machineIds: []
       };
@@ -533,6 +539,19 @@
         }
       } catch (e) { toast('Add failed: ' + e.message, true); btn.disabled = false; }
     }
+    // Fire a one-time "run now" for a program (pushes a fresh runRequest token).
+    async function runNow(p) {
+      if (!confirm(`Run "${p.name}" now on all machines it's targeted at?`)) return;
+      try {
+        const r = await fetch('/api/runnow', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) toast(res.commit ? `Run-now sent · ${res.commit}` : (res.message || 'Run-now sent'));
+        else toast('Run-now failed: ' + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast('Run-now failed: ' + e.message, true); }
+    }
+
     $('#a-submit').onclick = addProgram;
 
     // View switch + filter

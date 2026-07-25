@@ -38,7 +38,11 @@
         "arguments": { "type": "string" },
         "runAtStartup": { "type": "boolean" },
         "runAsAdmin": { "type": "boolean" },
-        "runOnce": { "type": "boolean" },
+        "runOnceInstalled": { "type": "boolean" },
+        "runRequest": {
+          "description": "On-demand run token. Change the value (the console does this via 'Run now') to run the program once on each targeted machine, in the user session.",
+          "type": "string"
+        },
         "target": {
           "description": "Which machines this program runs on. Omit = all. A hostname or machine id, the keyword \"all\", or an array of them.",
           "oneOf": [

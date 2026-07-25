@@ -47,7 +47,7 @@ public sealed class ProgramView
     public string? Description { get; set; }
     public bool RunAtStartup { get; set; }
     public bool RunAsAdmin { get; set; }
-    public bool RunOnce { get; set; }
+    public bool RunOnceInstalled { get; set; }
 }
 
 /// <summary>One machine as shown in the console (from its heartbeat + your label).</summary>
@@ -99,7 +99,7 @@ public sealed class ProgramSettings
     [JsonPropertyName("description")] public string? Description { get; set; }
     [JsonPropertyName("runAtStartup")] public bool? RunAtStartup { get; set; }
     [JsonPropertyName("runAsAdmin")] public bool? RunAsAdmin { get; set; }
-    [JsonPropertyName("runOnce")] public bool? RunOnce { get; set; }
+    [JsonPropertyName("runOnceInstalled")] public bool? RunOnceInstalled { get; set; }
 }
 
 public sealed class SaveResult
@@ -107,6 +107,12 @@ public sealed class SaveResult
     public bool Ok { get; set; }
     public string Message { get; set; } = "";
     public string? Commit { get; set; }
+}
+
+/// <summary>Request to run a single program now (on-demand).</summary>
+public sealed class RunNowRequest
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
 }
 
 /// <summary>Request to add a new program to the manifest.</summary>
@@ -125,7 +131,7 @@ public sealed class AddRequest
     [JsonPropertyName("arguments")] public string? Arguments { get; set; }
     [JsonPropertyName("runAtStartup")] public bool RunAtStartup { get; set; }
     [JsonPropertyName("runAsAdmin")] public bool RunAsAdmin { get; set; }
-    [JsonPropertyName("runOnce")] public bool RunOnce { get; set; }
+    [JsonPropertyName("runOnceInstalled")] public bool RunOnceInstalled { get; set; }
     [JsonPropertyName("all")] public bool All { get; set; } = true;
     [JsonPropertyName("machineIds")] public List<string> MachineIds { get; set; } = new();
 }
@@ -323,7 +329,7 @@ public sealed class ControlRepo
             ["fileName"] = fileName,
             ["runAtStartup"] = req.RunAtStartup,
             ["runAsAdmin"] = req.RunAsAdmin,
-            ["runOnce"] = req.RunOnce
+            ["runOnceInstalled"] = req.RunOnceInstalled
         };
         if (checksum is not null) entry["checksum"] = checksum;
         if (!string.IsNullOrWhiteSpace(req.Arguments)) entry["arguments"] = req.Arguments.Trim();
@@ -345,6 +351,37 @@ public sealed class ControlRepo
             var sha = await _git.CommitAndPushAsync(
                 _opt.Remote, _opt.MainBranch, $"console: add program {id} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
             return new SaveResult { Ok = true, Message = $"Added {id}.", Commit = sha };
+        }
+        catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
+    /// <summary>Trigger a one-time interactive "run now" by rotating the program's runRequest token, then push.</summary>
+    public async Task<SaveResult> RunNowAsync(string programId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(programId)) return Fail("Program id is required.");
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
+
+        var manifestFull = Path.Combine(_opt.ControlRepoPath, ManifestPath);
+        if (!File.Exists(manifestFull)) return Fail($"{ManifestPath} not found.");
+        var root = JsonNode.Parse(File.ReadAllText(manifestFull), NodeOpts) as JsonObject
+                   ?? throw new InvalidOperationException("manifest.json is not a JSON object.");
+        if (root["programs"] is not JsonArray progs) return Fail("manifest.json has no 'programs' array.");
+
+        var prog = progs.OfType<JsonObject>()
+            .FirstOrDefault(p => string.Equals(p["id"]?.GetValue<string>(), programId, StringComparison.OrdinalIgnoreCase));
+        if (prog is null) return Fail($"Program '{programId}' not found.");
+
+        var token = DateTimeOffset.UtcNow.ToString("O");   // a fresh token = one new run on each targeted machine
+        prog["runRequest"] = token;
+        root["lastUpdated"] = token;
+        File.WriteAllText(manifestFull, root.ToJsonString(JsonWrite));
+
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: run-now {programId} ({DateTimeOffset.UtcNow:u})", new[] { ManifestPath }, ct);
+            return new SaveResult { Ok = true, Message = $"Run-now requested — it runs on each targeted machine's next sync.", Commit = sha };
         }
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
     }
@@ -404,7 +441,8 @@ public sealed class ControlRepo
     {
         if (s.RunAtStartup is bool ras) prog["runAtStartup"] = ras;
         if (s.RunAsAdmin is bool raa) prog["runAsAdmin"] = raa;
-        if (s.RunOnce is bool ro) prog["runOnce"] = ro;
+        if (s.RunOnceInstalled is bool ro) prog["runOnceInstalled"] = ro;
+        prog.Remove("runOnce");   // drop the legacy key name if present
         if (!string.IsNullOrWhiteSpace(s.Version)) prog["version"] = s.Version!.Trim();
         if (!string.IsNullOrWhiteSpace(s.Type)) prog["type"] = s.Type!.Trim().ToLowerInvariant();
         if (!string.IsNullOrWhiteSpace(s.InstallPath)) prog["installPath"] = s.InstallPath!.Trim();
@@ -505,7 +543,7 @@ public sealed class ControlRepo
             Description = GetStr(prog, "description"),
             RunAtStartup = GetBool(prog, "runAtStartup"),
             RunAsAdmin = GetBool(prog, "runAsAdmin"),
-            RunOnce = GetBool(prog, "runOnce")
+            RunOnceInstalled = GetBool(prog, "runOnceInstalled")
         };
     }
 
