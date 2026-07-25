@@ -160,7 +160,11 @@ public sealed class ManifestService : IManifestService   // the actual implement
                 continue;
             }
 
-            plan.Actions.Add(new SyncAction { Type = SyncActionType.UpToDate, Program = prog });  // otherwise it's already correct
+            // Already installed & intact. With the gated launcher the Run entry only depends on
+            // runAtStartup/runAsAdmin, so flag when those changed so sync can re-apply the entry
+            // even without a version bump (e.g. after editing settings in the console).
+            var startupChanged = prev.RunAtStartup != prog.RunAtStartup || prev.RunAsAdmin != prog.RunAsAdmin;
+            plan.Actions.Add(new SyncAction { Type = SyncActionType.UpToDate, Program = prog, StartupConfigChanged = startupChanged });
         }
 
         // Deletions: remote status=deleted AND currently present locally.

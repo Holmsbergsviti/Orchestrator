@@ -8,11 +8,9 @@
 //   that actually does the syncing.
 // =====================================================================================
 
-using System.Net.Http.Headers;                        // for building the GitHub HTTP request headers
+using Microsoft.Extensions.DependencyInjection;       // for resolving services (GetRequiredService)
 using Microsoft.Extensions.Hosting.WindowsServices;   // helpers to detect if we're running as a Windows service
-using Microsoft.Extensions.Options;                   // for reading strongly-typed config (IOptions<>)
 using Orchestrator.Service;                            // our own namespaces below
-using Orchestrator.Service.Models;
 using Orchestrator.Service.Services;
 using Serilog;                                         // the logging library
 
@@ -33,6 +31,11 @@ if (OperatingSystem.IsWindows())                       // these commands only ma
     }
 }
 
+// Gated launcher: startup entries call "run-program <id>". This checks the current
+// manifest and only launches the program if it's still active + targeted here.
+if ((args.Length > 0 ? args[0].ToLowerInvariant() : null) == "run-program")
+    return RunLauncher(args);
+
 // Bootstrap logger for early failures before the host is built.
 Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();  // a basic console logger for very-early errors
 
@@ -43,52 +46,9 @@ try
     // Run as a Windows Service when launched by the SCM; console when run interactively.
     builder.Services.AddWindowsService(o => o.ServiceName = OrchestratorDefaults.Instance.ServiceName);  // enables Windows-service behavior (name from defaults.json)
 
-    builder.Services.Configure<OrchestratorConfig>(                                  // bind appsettings.json...
-        builder.Configuration.GetSection(OrchestratorConfig.SectionName));           // ...the "Orchestrator" section -> OrchestratorConfig
-
-    // Serilog: daily-rolling file under <RootPath>\logs plus console for interactive runs.
-    builder.Services.AddSerilog((sp, cfg) =>
-    {
-        var conf = sp.GetRequiredService<IOptions<OrchestratorConfig>>().Value;  // read our config to find the log folder
-        var logDir = conf.LogsPath;                                              // <root>\logs
-        Directory.CreateDirectory(logDir);                                       // make sure that folder exists
-        cfg.MinimumLevel.Information()                                           // log Information level and above
-           .Enrich.FromLogContext()                                             // include contextual properties in each line
-           .WriteTo.Console(                                                    // write logs to the console...
-               outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] {Message:lj}{NewLine}{Exception}")  // ...with this format
-           .WriteTo.File(                                                       // ...and to a file
-               path: Path.Combine(logDir, "log-.txt"),                          // file name pattern (date gets inserted)
-               rollingInterval: RollingInterval.Day,                            // start a new file each day
-               retainedFileCountLimit: 90,                                      // keep 90 days of logs, delete older
-               outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] {Message:lj}{NewLine}{Exception}");  // file line format
-    });
-
-    // Named HttpClient for the GitHub API (auth + UA set once).
-    builder.Services.AddHttpClient(GitHubClient.HttpClientName, (sp, client) =>
-    {
-        var conf = sp.GetRequiredService<IOptions<OrchestratorConfig>>().Value;   // read config (for the token)
-        client.BaseAddress = new Uri("https://api.github.com/");                  // all requests go to the GitHub API
-        client.DefaultRequestHeaders.UserAgent.Add(                              // GitHub requires a User-Agent header
-            new ProductInfoHeaderValue("GitHubOrchestrator", "1.0"));
-        client.DefaultRequestHeaders.Accept.Add(                                // ask for GitHub's JSON API format
-            new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");  // pin the API version for stability
-        if (!string.IsNullOrWhiteSpace(conf.GitHubToken))                        // if we have a token (private repo)...
-            client.DefaultRequestHeaders.Authorization =                        // ...send it as a Bearer token
-                new AuthenticationHeaderValue("Bearer", conf.GitHubToken);
-        client.Timeout = TimeSpan.FromMinutes(5);                               // give big downloads up to 5 minutes
-    });
-
-    builder.Services.AddSingleton<IConfigService, ConfigService>();          // register each service so DI can create/inject it
-    builder.Services.AddSingleton<IChecksumService, ChecksumService>();      // (one shared instance each -> "singleton")
-    builder.Services.AddSingleton<IGitHubClient, GitHubClient>();
-    builder.Services.AddSingleton<IRegistryService, RegistryService>();
-    builder.Services.AddSingleton<IScheduledTaskService, ScheduledTaskService>();
-    builder.Services.AddSingleton<IStartupManager, StartupManager>();
-    builder.Services.AddSingleton<IManifestService, ManifestService>();
-    builder.Services.AddSingleton<IFleetReporter, FleetReporter>();
-    builder.Services.AddSingleton<ISyncService, SyncService>();
-    builder.Services.AddHostedService<Worker>();                             // register the background loop that drives everything
+    ServiceRegistration.AddOrchestratorSerilog(builder);   // file + console logging
+    ServiceRegistration.AddOrchestratorServices(builder);  // config, GitHub client, all services (shared with the launcher)
+    builder.Services.AddHostedService<Worker>();           // the background loop that drives everything
 
     var host = builder.Build();   // finalize the container and build the host
     host.Run();                   // start running and block here until the service is stopped
@@ -102,4 +62,41 @@ catch (Exception ex)
 finally
 {
     Log.CloseAndFlush();  // make sure all buffered log lines are written out before we quit
+}
+
+// Runs the gated launcher for "run-program <id>": build a minimal host (same services as
+// the main path, minus the background Worker), resolve the launcher, and run it once.
+static int RunLauncher(string[] args)
+{
+    var id = args.Length > 1 ? args[1] : null;
+    if (string.IsNullOrWhiteSpace(id))
+    {
+        Console.Error.WriteLine("usage: run-program <programId>");
+        return 2;
+    }
+    try
+    {
+        // ContentRoot = the exe's folder so appsettings.json (next to the exe) is found even
+        // though the launcher isn't started as a Windows service.
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory
+        });
+        ServiceRegistration.AddOrchestratorSerilog(builder);
+        ServiceRegistration.AddOrchestratorServices(builder);
+
+        using var host = builder.Build();
+        var launcher = host.Services.GetRequiredService<IProgramLauncher>();
+        return launcher.LaunchIfActiveAsync(id, CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"run-program failed: {ex.Message}");
+        return 1;
+    }
+    finally
+    {
+        Log.CloseAndFlush();
+    }
 }

@@ -17,8 +17,9 @@ public sealed class ScheduledTaskServiceTests
     [Fact]
     public void BuildTaskXml_RunsAsSystem_WithHighestPrivilege_AtBoot()
     {
-        var xml = ScheduledTaskService.BuildTaskXml(   // build the task XML for an elevated exe
-            TestData.Program("a", type: ProgramType.Exe, installPath: "root", fileName: "agent.exe", runAsAdmin: true));
+        var xml = ScheduledTaskService.BuildTaskXml(   // build the task XML for an elevated program
+            TestData.Program("a", type: ProgramType.Exe, installPath: "root", fileName: "agent.exe", runAsAdmin: true),
+            @"C:\orch.exe", "run-program a");
 
         Assert.Contains("<UserId>S-1-5-18</UserId>", xml);          // NT AUTHORITY\SYSTEM
         Assert.Contains("<RunLevel>HighestAvailable</RunLevel>", xml);  // highest privilege
@@ -27,29 +28,30 @@ public sealed class ScheduledTaskServiceTests
     }
 
     [Fact]
-    public void BuildTaskXml_OmitsArguments_ForExeWithNoArgs()
+    public void BuildTaskXml_UsesGatedLauncherCommandAndArgs()
     {
-        var xml = ScheduledTaskService.BuildTaskXml(                    // a plain exe with no arguments
-            TestData.Program("a", type: ProgramType.Exe, fileName: "agent.exe"));
+        var xml = ScheduledTaskService.BuildTaskXml(                    // the task should run the orchestrator launcher
+            TestData.Program("a", type: ProgramType.Batch, fileName: "sync.bat"),
+            @"C:\orch.exe", "run-program a");
 
-        Assert.DoesNotContain("<Arguments>", xml);                     // so there should be no <Arguments> tag
+        Assert.Contains(@"<Command>C:\orch.exe</Command>", xml);       // the launcher exe, not cmd.exe
+        Assert.Contains("<Arguments>run-program a</Arguments>", xml);  // and the run-program verb
     }
 
     [Fact]
-    public void BuildTaskXml_IncludesArguments_ForBatch()
+    public void BuildTaskXml_OmitsArguments_WhenNone()
     {
-        var xml = ScheduledTaskService.BuildTaskXml(                    // a batch file with an argument
-            TestData.Program("a", type: ProgramType.Batch, fileName: "sync.bat", arguments: "full"));
+        var xml = ScheduledTaskService.BuildTaskXml(                    // no exec arguments
+            TestData.Program("a", type: ProgramType.Exe, fileName: "agent.exe"), @"C:\orch.exe", "");
 
-        Assert.Contains("<Arguments>", xml);                           // arguments should be present
-        Assert.Contains("<Command>cmd.exe</Command>", xml);            // and the command should be cmd.exe
+        Assert.DoesNotContain("<Arguments>", xml);                     // so there should be no <Arguments> tag
     }
 
     [Fact]
     public void BuildTaskXml_EscapesSpecialCharactersInDescription()
     {
         var xml = ScheduledTaskService.BuildTaskXml(                    // a description with XML-special characters
-            TestData.Program("a", fileName: "agent.exe", description: "A & B <tool>"));
+            TestData.Program("a", fileName: "agent.exe", description: "A & B <tool>"), @"C:\orch.exe", "run-program a");
 
         Assert.Contains("A &amp; B &lt;tool&gt;", xml);                // they must be escaped
         Assert.DoesNotContain("A & B <tool>", xml);                    // and not left raw
@@ -59,7 +61,8 @@ public sealed class ScheduledTaskServiceTests
     public void BuildTaskXml_IsWellFormedXml()
     {
         var xml = ScheduledTaskService.BuildTaskXml(                    // build XML with tricky quoted arguments
-            TestData.Program("a", type: ProgramType.PowerShell, installPath: "s", fileName: "m.ps1", arguments: "-X \"q\""));
+            TestData.Program("a", type: ProgramType.PowerShell, installPath: "s", fileName: "m.ps1"),
+            @"C:\orch.exe", "run-program a \"q\"");
 
         // Drop the <?xml ... encoding="UTF-16"?> prolog: the string is already UTF-16
         // in memory, and we only care that the element tree is well-formed and escaped.

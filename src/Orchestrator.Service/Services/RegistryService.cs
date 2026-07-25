@@ -42,7 +42,11 @@ public sealed class RegistryService : IRegistryService
 
     public void RegisterStartup(ProgramEntry program)
     {
-        var command = LaunchCommandBuilder.BuildRunKeyValue(program);   // build the command line to store
+        // Register the GATED launcher, not the program directly: at boot it re-checks the
+        // manifest and only runs the program if it's still active + targeted here.
+        var exe = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for startup registration.");
+        var command = LaunchCommandBuilder.BuildLauncherRunKeyValue(exe, program.Id);   // "orch.exe" run-program <id>
         using var key = Registry.LocalMachine.CreateSubKey(_config.StartupRegistryKey, writable: true)   // open (or create) the Run key
             ?? throw new InvalidOperationException($"Cannot open registry key {_config.StartupRegistryKey}");  // fail if we can't
         key.SetValue(EntryName(program), command, RegistryValueKind.String);   // write our entry: name -> command

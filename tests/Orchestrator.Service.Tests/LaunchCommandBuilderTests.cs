@@ -71,4 +71,11 @@ public sealed class LaunchCommandBuilderTests
         Assert.Contains("app.exe\"", value);      // the quoted exe path
         Assert.EndsWith("--min", value);          // followed by the argument
     }
+
+    [Fact]
+    public void LauncherRunKeyValue_QuotesExe_AndAppendsRunProgramVerb()
+    {
+        var value = LaunchCommandBuilder.BuildLauncherRunKeyValue(@"C:\Windows\Orch\orchestrator-service.exe", "backup-001");
+        Assert.Equal("\"C:\\Windows\\Orch\\orchestrator-service.exe\" run-program backup-001", value);  // gated launcher command
+    }
 }

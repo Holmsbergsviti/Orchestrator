@@ -26,6 +26,9 @@ public sealed class SyncAction
     /// <summary>Previously installed version, when known (for Update/Delete).</summary>
     public string? PreviousVersion { get; init; }          // the old version, for nicer log messages
 
+    /// <summary>On an UpToDate action, true when startup flags changed and the entry must be re-applied.</summary>
+    public bool StartupConfigChanged { get; init; }        // runAtStartup/runAsAdmin flipped without a version bump
+
     public override string ToString() => $"{Type}: {Program.Name} v{Program.Version}";  // readable text for logs
 }
 

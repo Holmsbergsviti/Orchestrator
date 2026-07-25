@@ -53,9 +53,19 @@ public static class LaunchCommandBuilder   // static = pure helper, no instance/
     public static string BuildRunKeyValue(ProgramEntry program)
     {
         var cmd = Build(program);                                     // get the (exe, args) pair
-        var exe = cmd.Executable.Contains(' ') || cmd.Executable.Contains('\\')  // if the exe has a space or looks like a path...
-            ? $"\"{cmd.Executable}\""                                 // ...wrap it in quotes so Windows parses it correctly
-            : cmd.Executable;                                        // otherwise leave it as-is
-        return string.IsNullOrEmpty(cmd.Arguments) ? exe : $"{exe} {cmd.Arguments}";  // join exe + args into one command line
+        return string.IsNullOrEmpty(cmd.Arguments)                   // join exe + args into one command line
+            ? QuoteIfNeeded(cmd.Executable)
+            : $"{QuoteIfNeeded(cmd.Executable)} {cmd.Arguments}";
     }
+
+    /// <summary>
+    /// The HKLM Run value for the GATED launcher: <c>"orchestrator.exe" run-program &lt;id&gt;</c>.
+    /// At boot this runs the orchestrator, which re-checks the manifest and launches the real
+    /// program only if it is still active + targeted — so a just-deleted program never runs.
+    /// </summary>
+    public static string BuildLauncherRunKeyValue(string orchestratorExe, string programId)
+        => $"{QuoteIfNeeded(orchestratorExe)} run-program {programId}";
+
+    private static string QuoteIfNeeded(string exe)
+        => exe.Contains(' ') || exe.Contains('\\') ? $"\"{exe}\"" : exe;  // quote paths/spaced exes for correct parsing
 }

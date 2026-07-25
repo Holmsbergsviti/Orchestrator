@@ -108,7 +108,14 @@ public sealed class SyncService : ISyncService   // the actual implementation
                                 record.Deleted.Add(action.Program.Name);        // record the deletion
                                 break;
                             case SyncActionType.UpToDate:
-                                break;   // nothing to do
+                                // Startup flags changed without a version bump -> re-apply the entry.
+                                if (OperatingSystem.IsWindows() && action.StartupConfigChanged)
+                                {
+                                    if (action.Program.RunAtStartup) _startup.Register(action.Program);
+                                    else _startup.Remove(action.Program);
+                                    _log.LogInformation("Updated startup registration for {Name} (flags changed)", action.Program.Name);
+                                }
+                                break;   // otherwise nothing to do
                         }
                     }
                     catch (Exception ex)
@@ -207,7 +214,11 @@ public sealed class SyncService : ISyncService   // the actual implementation
             string.IsNullOrWhiteSpace(p.Reason) ? "" : $" ({p.Reason})");   // log the name and reason (if given)
 
         if (OperatingSystem.IsWindows())
+        {
             _startup.Remove(p);   // remove any startup registration first
+            var killed = ProcessTerminator.KillByFilePath(p.FullFilePath, _log);   // stop it now if it's still running
+            if (killed > 0) _log.LogInformation("Terminated {Count} running instance(s) of {Name}", killed, p.Name);
+        }
 
         if (!string.IsNullOrWhiteSpace(p.InstallPath) && Directory.Exists(p.InstallPath))   // if its folder exists...
         {

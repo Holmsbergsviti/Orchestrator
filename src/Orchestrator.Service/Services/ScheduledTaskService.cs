@@ -51,7 +51,11 @@ public sealed class ScheduledTaskService : IScheduledTaskService
 
     public void CreateStartupTask(ProgramEntry program)
     {
-        var xml = BuildTaskXml(program);   // build the task definition as XML text
+        // The task runs the GATED launcher (as SYSTEM at boot); the launcher re-checks the
+        // manifest and only runs the program if it's still active + targeted here.
+        var exe = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
+        var xml = BuildTaskXml(program, exe, $"run-program {program.Id}");   // build the task definition as XML text
         // schtasks requires the XML file to be UTF-16.
         var tmp = Path.Combine(Path.GetTempPath(), $"orch-task-{Guid.NewGuid():N}.xml");   // a unique temp file for the XML
         File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));  // write it as UTF-16 with a BOM
@@ -103,12 +107,11 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     /// Build a Task Scheduler 1.2 XML document that runs the program as SYSTEM with
     /// the highest available privilege, at boot. Pure and testable.
     /// </summary>
-    public static string BuildTaskXml(ProgramEntry program)
+    public static string BuildTaskXml(ProgramEntry program, string execCommand, string execArguments)
     {
-        var cmd = LaunchCommandBuilder.Build(program);   // work out the executable + arguments to run
         var description = Esc(program.Description ?? $"Orchestrator startup task for {program.Name}");  // XML-safe description
-        var command = Esc(cmd.Executable);               // XML-safe executable path
-        var arguments = Esc(cmd.Arguments);              // XML-safe arguments
+        var command = Esc(execCommand);                  // XML-safe executable path (the orchestrator launcher)
+        var arguments = Esc(execArguments);              // XML-safe arguments ("run-program <id>")
         var workingDir = Esc(program.InstallPath);       // XML-safe working directory
 
         var sb = new StringBuilder();   // build the XML text piece by piece
