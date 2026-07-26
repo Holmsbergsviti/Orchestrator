@@ -295,8 +295,10 @@ public sealed class SyncService : ISyncService   // the actual implementation
             SyncHistory history = new();   // start with an empty history...
             if (File.Exists(_config.SyncHistoryPath))   // ...but load the existing one if present
             {
-                history = JsonSerializer.Deserialize<SyncHistory>(
-                    File.ReadAllText(_config.SyncHistoryPath)) ?? new();
+                // A corrupt/partial file (e.g. null bytes from an unclean shutdown) shouldn't
+                // break history forever — just start fresh and overwrite it this cycle.
+                try { history = JsonSerializer.Deserialize<SyncHistory>(File.ReadAllText(_config.SyncHistoryPath)) ?? new(); }
+                catch (Exception ex) { _log.LogWarning(ex, "sync-history.json unreadable; resetting it"); history = new(); }
             }
             history.Records.Add(record);   // add this cycle's record
             if (history.Records.Count > MaxHistoryRecords)   // too many records?
