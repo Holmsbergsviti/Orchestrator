@@ -20,6 +20,9 @@ public interface IGitHubClient   // the contract for GitHub access
     /// <summary>Fetch and deserialize the remote manifest. Returns null on network/parse failure.</summary>
     Task<Manifest?> GetManifestAsync(CancellationToken ct = default);
 
+    /// <summary>Fetch and deserialize commands.json (admin commands). Null if missing/unreadable.</summary>
+    Task<CommandFile?> GetCommandsAsync(CancellationToken ct = default);
+
     /// <summary>Download the raw bytes for a program file.</summary>
     Task<byte[]> DownloadFileAsync(ProgramEntry program, CancellationToken ct = default);
 
@@ -76,6 +79,24 @@ public sealed class GitHubClient : IGitHubClient
             _log.LogError(ex, "Failed to fetch manifest from {Owner}/{Repo}@{Branch}",
                 _config.RepoOwner, _config.RepoName, _config.Branch);   // log the failure...
             return null;                                                // ...and return null so the caller can skip this cycle
+        }
+    }
+
+    public async Task<CommandFile?> GetCommandsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var bytes = await GetContentsRawAsync("commands.json", ct);   // admin commands file (optional)
+            return JsonSerializer.Deserialize<CommandFile>(bytes, JsonOpts);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;   // no commands.json in the repo -> nothing to do (normal)
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not fetch commands.json");   // non-fatal
+            return null;
         }
     }
 

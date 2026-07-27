@@ -115,6 +115,13 @@ public sealed class RunNowRequest
     [JsonPropertyName("id")] public string Id { get; set; } = "";
 }
 
+/// <summary>Request to send an admin command (shutdown/restart) to a machine.</summary>
+public sealed class CommandRequest
+{
+    [JsonPropertyName("machineId")] public string MachineId { get; set; } = "";
+    [JsonPropertyName("action")] public string Action { get; set; } = "";
+}
+
 /// <summary>Request to add a new program to the manifest.</summary>
 public sealed class AddRequest
 {
@@ -435,6 +442,39 @@ public sealed class ControlRepo
             var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
                 $"console: delete program {programId} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
             return new SaveResult { Ok = true, Message = "Deleted — machines uninstall it on their next sync.", Commit = sha };
+        }
+        catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
+    /// <summary>Send an admin command (shutdown/restart) to a machine via commands.json, then push.</summary>
+    public async Task<SaveResult> SendCommandAsync(string machineId, string action, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(machineId)) return Fail("Machine id is required.");
+        action = (action ?? string.Empty).Trim().ToLowerInvariant();
+        if (action is not ("shutdown" or "restart")) return Fail("Action must be 'shutdown' or 'restart'.");
+
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
+
+        const string cmdPath = "commands.json";
+        var full = Path.Combine(_opt.ControlRepoPath, cmdPath);
+        var root = File.Exists(full)
+            ? (JsonNode.Parse(File.ReadAllText(full), NodeOpts) as JsonObject ?? new JsonObject())
+            : new JsonObject();
+        if (root["commands"] is not JsonObject cmds) { cmds = new JsonObject(); root["commands"] = cmds; }
+        cmds[machineId] = new JsonObject
+        {
+            ["action"] = action,
+            ["id"] = Guid.NewGuid().ToString("N"),   // fresh nonce = run once on the target
+            ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+        };
+        File.WriteAllText(full, root.ToJsonString(JsonWrite));
+
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: {action} {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
+            return new SaveResult { Ok = true, Message = $"{action} sent — runs on the machine's next sync (~1 cycle, 15s delay).", Commit = sha };
         }
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
     }

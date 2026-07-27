@@ -95,6 +95,17 @@ app.MapPost("/api/delete", async (RunNowRequest req, ControlRepo r, Cancellation
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// Send an admin command (shutdown/restart) to a machine.
+app.MapPost("/api/command", async (CommandRequest req, ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.SendCommandAsync(req.MachineId, req.Action, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
 // A tiny health/info endpoint the page uses to show which repo it's driving.
 app.MapGet("/api/info", (ControlRepo r) => Results.Ok(new { repoPath = r.RepoPath }));
 

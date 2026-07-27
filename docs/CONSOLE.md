@@ -71,6 +71,9 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   different from unticking all machines, which just deactivates it but keeps a `deleted` row.
 - **Run now** (in Settings) — runs the program once on each targeted machine's next sync, in
   the logged-in user's session.
+- **Shut down / Restart** (Machines table, Power column) — sends a one-off power command to a
+  machine. The agent runs it (as SYSTEM) on its next sync, after a 15-second warning. Written
+  to `commands.json` with a nonce so it runs exactly once and never loops after reboot.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.

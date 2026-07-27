@@ -134,6 +134,9 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 foreach (var p in effective.ActivePrograms)
                     MaybeRunRequest(p);
 
+                // Execute any pending admin command (shutdown/restart) targeted at this machine.
+                await HandleCommandsAsync(machine, ct);
+
                 record.Success = record.Errors.Count == 0;     // success only if nothing errored
             }
         }
@@ -285,6 +288,51 @@ public sealed class SyncService : ISyncService   // the actual implementation
         catch (Exception ex)
         {
             _log.LogError(ex, "run-now failed for {Name}", p.Name);
+        }
+    }
+
+    /// <summary>Run a pending admin command (shutdown/restart) for this machine, once per command id.</summary>
+    private async Task HandleCommandsAsync(MachineConfig machine, CancellationToken ct)
+    {
+        var file = await _github.GetCommandsAsync(ct);   // commands.json (optional)
+        if (file is null) return;
+        if (!file.Commands.TryGetValue(machine.MachineId, out var cmd)) return;   // nothing for this machine
+        if (string.IsNullOrEmpty(cmd.Id) || machine.CompletedCommands.Contains(cmd.Id)) return;   // already done / no id
+
+        // Record the id BEFORE acting so a delayed shutdown can't re-trigger after the machine reboots.
+        machine.CompletedCommands.Add(cmd.Id);
+        if (machine.CompletedCommands.Count > 100)                       // keep the list bounded
+            machine.CompletedCommands.RemoveRange(0, machine.CompletedCommands.Count - 100);
+        _configService.SaveMachineConfig(machine);
+
+        ExecuteCommand(cmd);
+    }
+
+    private void ExecuteCommand(MachineCommand cmd)
+    {
+        if (!OperatingSystem.IsWindows()) return;   // shutdown.exe is Windows-only
+
+        // 15s delay gives the user a heads-up and lets this sync cycle finish cleanly.
+        var args = cmd.Action.Trim().ToLowerInvariant() switch
+        {
+            "shutdown" => "/s /t 15 /c \"Remote shutdown requested via Orchestrator\"",
+            "restart"  => "/r /t 15 /c \"Remote restart requested via Orchestrator\"",
+            _ => null
+        };
+        if (args is null)
+        {
+            _log.LogWarning("Ignoring unknown command action '{Action}' (id {Id})", cmd.Action, cmd.Id);
+            return;
+        }
+
+        try
+        {
+            _log.LogWarning("Executing remote {Action} command (id {Id}) in 15s", cmd.Action, cmd.Id);
+            Process.Start(new ProcessStartInfo("shutdown.exe", args) { UseShellExecute = false, CreateNoWindow = true });
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Failed to execute {Action} command", cmd.Action);
         }
     }
 

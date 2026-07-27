@@ -86,4 +86,8 @@ public sealed class MachineConfig
     /// <summary>Program id -> the last "runRequest" token already executed here (so each token runs once).</summary>
     [JsonPropertyName("completedRunRequests")]               // maps JSON "completedRunRequests"
     public Dictionary<string, string> CompletedRunRequests { get; set; } = new();  // remembers the last run-now token run per program
+
+    /// <summary>Ids of admin commands (shutdown/restart) already executed here, so they never re-run.</summary>
+    [JsonPropertyName("completedCommands")]                  // maps JSON "completedCommands"
+    public List<string> CompletedCommands { get; set; } = new();  // remembers which command nonces already ran here
 }

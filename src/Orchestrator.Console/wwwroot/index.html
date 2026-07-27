@@ -112,7 +112,7 @@
           <thead>
             <tr>
               <th>Status</th><th>Label</th><th>Hostname</th><th>OS</th>
-              <th>Agent</th><th>Last seen</th><th>Running</th><th>Last sync</th>
+              <th>Agent</th><th>Last seen</th><th>Running</th><th>Last sync</th><th>Power</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -293,6 +293,12 @@
         const sync = m.lastSyncSuccess
           ? el('span', { className: 'pill ok', textContent: 'ok' })
           : el('span', { className: 'pill bad', title: m.lastError || '', textContent: 'error' });
+        const power = el('td', {}, [
+          el('button', { type: 'button', textContent: 'Shut down', title: 'Power off this machine on its next sync',
+            onclick: () => sendCommand(m, 'shutdown') }),
+          el('button', { type: 'button', textContent: 'Restart', style: 'margin-left:6px', title: 'Reboot this machine on its next sync',
+            onclick: () => sendCommand(m, 'restart') })
+        ]);
         tb.append(el('tr', {}, [
           status,
           el('td', {}, labelInput),
@@ -301,7 +307,8 @@
           el('td', { className: 'muted', textContent: m.agentVersion || '—' }),
           el('td', { title: m.lastSeenUtc || '', textContent: relTime(m.lastSeenUtc) }),
           el('td', { textContent: (m.appliedProgramIds || []).length + ' program(s)' }),
-          el('td', {}, sync)
+          el('td', {}, sync),
+          power
         ]));
       }
     }
@@ -555,6 +562,20 @@
         if (r.ok && res.ok) { toast(res.commit ? `Deleted · ${res.commit}` : (res.message || 'Deleted')); await load(); }
         else { toast('Delete failed: ' + (res.message || res.detail || 'unknown error'), true); }
       } catch (e) { toast('Delete failed: ' + e.message, true); }
+    }
+
+    // Send a power command (shutdown/restart) to a machine.
+    async function sendCommand(m, action) {
+      const verb = action === 'shutdown' ? 'Shut down' : 'Restart';
+      if (!confirm(`${verb} "${m.label || m.hostname}"?\n\nHappens on the machine's next sync (~1 cycle), after a 15-second warning on the machine.`)) return;
+      try {
+        const r = await fetch('/api/command', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId, action })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) toast(res.commit ? `${verb} sent · ${res.commit}` : (res.message || 'sent'));
+        else toast(`${verb} failed: ` + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast(`${verb} failed: ` + e.message, true); }
     }
 
     // Fire a one-time "run now" for a program (pushes a fresh runRequest token).
