@@ -47,7 +47,8 @@ param(
     [string]$InstallRoot = "",                          # install folder (blank -> filled from defaults.json)
     [string]$CodeRepo = "Holmsbergsviti/Orchestrator",  # repo that holds the exe + install scripts
     [string]$CodeRef = "main",                          # branch of that code repo to pull scripts from
-    [switch]$BuildFromSource                             # if set, compile locally instead of downloading
+    [switch]$BuildFromSource,                            # if set, compile locally instead of downloading
+    [switch]$IsWaker                                     # mark this always-on machine as the Wake-on-LAN sender
 )
 
 $ErrorActionPreference = "Stop"  # stop the whole script the moment any command errors
@@ -157,6 +158,7 @@ $installText = (New-Object System.Net.WebClient).DownloadString("https://raw.git
 # Turn that text into a runnable block and call it, passing along all our settings + the freshly built/downloaded exe folder.
 & ([scriptblock]::Create($installText)) `
     -RepoOwner $RepoOwner -RepoName $RepoName -Token $Token -Branch $Branch `
-    -IntervalMinutes $IntervalMinutes -InstallRoot $InstallRoot -SourceDir $pub -DefaultsPath $defaultsFile
+    -IntervalMinutes $IntervalMinutes -InstallRoot $InstallRoot -SourceDir $pub -DefaultsPath $defaultsFile `
+    -IsWaker:$IsWaker
 
 Write-Host "Bootstrap complete. Logs: $InstallRoot\logs" -ForegroundColor Green  # final success message + where to find logs

@@ -72,8 +72,13 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 - **Run now** (in Settings) — runs the program once on each targeted machine's next sync, in
   the logged-in user's session.
 - **Shut down / Restart** (Machines table, Power column) — sends a one-off power command to a
-  machine. The agent runs it (as SYSTEM) on its next sync, after a 15-second warning. Written
+  machine. The agent runs it forced (`/f`) on its next sync, after a 5-second warning. Written
   to `commands.json` with a nonce so it runs exactly once and never loops after reboot.
+- **Wake / Wake all** (Machines table) — Wake-on-LAN. The agent can't power a machine on (it's
+  off), so a designated **waker** does it: install one always-on machine per network segment
+  with `-IsWaker` (or `"IsWaker": true` in its appsettings), enable WoL in each target's
+  BIOS/NIC, and the waker broadcasts magic packets to the targets' MACs (reported in their
+  heartbeats). Machines with no reported MAC yet are skipped.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.

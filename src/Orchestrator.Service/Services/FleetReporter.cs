@@ -7,6 +7,7 @@
 //   failure here is logged but never affects the sync itself.
 // =====================================================================================
 
+using System.Net.NetworkInformation;       // to read this machine's NIC MAC addresses
 using System.Reflection;                   // to read the service's own version
 using System.Runtime.InteropServices;      // for the OS description string
 using System.Text;                         // for UTF-8 encoding the heartbeat JSON
@@ -75,7 +76,8 @@ public sealed class FleetReporter : IFleetReporter
                 LastSyncSuccess = record.Success,
                 ManifestVersion = record.ManifestVersion,
                 AppliedProgramIds = applied,
-                LastError = record.Errors.Count > 0 ? record.Errors[0] : null
+                LastError = record.Errors.Count > 0 ? record.Errors[0] : null,
+                MacAddresses = GetMacAddresses()
             };
 
             var last = LoadLastHeartbeat();   // the last one we committed (if any)
@@ -126,6 +128,25 @@ public sealed class FleetReporter : IFleetReporter
         if (!string.Equals(current.Signature, last.Signature, StringComparison.Ordinal)) return true;  // real change
         if (!DateTimeOffset.TryParse(last.LastSeenUtc, out var lastSeen)) return true;  // unparseable -> refresh
         return now - lastSeen >= maxInterval;                           // otherwise only refresh once it's gone stale
+    }
+
+    /// <summary>This machine's usable NIC MAC addresses (uppercase, colon-separated) for Wake-on-LAN.</summary>
+    private static List<string> GetMacAddresses()
+    {
+        var macs = new List<string>();
+        try
+        {
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;                       // only active NICs
+                if (ni.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel) continue;
+                var bytes = ni.GetPhysicalAddress().GetAddressBytes();
+                if (bytes.Length != 6) continue;                                                  // real Ethernet/Wi-Fi MACs only
+                macs.Add(string.Join(":", bytes.Select(b => b.ToString("X2"))));
+            }
+        }
+        catch { /* best effort */ }
+        return macs.Distinct().ToList();
     }
 
     private Heartbeat? LoadLastHeartbeat()

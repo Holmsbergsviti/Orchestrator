@@ -106,6 +106,17 @@ app.MapPost("/api/command", async (CommandRequest req, ControlRepo r, Cancellati
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// Wake-on-LAN one or more machines (the waker agent sends the packets).
+app.MapPost("/api/wake", async (WakeApiRequest req, ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.SendWakeAsync(req.MachineIds, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
 // A tiny health/info endpoint the page uses to show which repo it's driving.
 app.MapGet("/api/info", (ControlRepo r) => Results.Ok(new { repoPath = r.RepoPath }));
 

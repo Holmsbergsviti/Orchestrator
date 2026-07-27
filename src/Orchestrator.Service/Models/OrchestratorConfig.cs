@@ -57,6 +57,9 @@ public sealed class OrchestratorConfig
     /// <summary>Push a heartbeat at least this often even when nothing changed (freshness bound).</summary>
     public int HeartbeatMaxIntervalMinutes { get; set; } = OrchestratorDefaults.Instance.HeartbeatMaxIntervalMinutes;  // caps how stale "last seen" can get (from defaults.json)
 
+    /// <summary>If true, this (always-on) machine sends Wake-on-LAN magic packets for wake requests.</summary>
+    public bool IsWaker { get; set; } = false;   // set true on one always-on machine per network segment
+
     [JsonIgnore] public string ProgramsPath => Path.Combine(RootPath, "programs");                    // <root>\programs — installed program files
     [JsonIgnore] public string LogsPath => Path.Combine(RootPath, "logs");                            // <root>\logs — log files
     [JsonIgnore] public string CachePath => Path.Combine(RootPath, "cache");                          // <root>\cache — remembered state
@@ -90,4 +93,8 @@ public sealed class MachineConfig
     /// <summary>Ids of admin commands (shutdown/restart) already executed here, so they never re-run.</summary>
     [JsonPropertyName("completedCommands")]                  // maps JSON "completedCommands"
     public List<string> CompletedCommands { get; set; } = new();  // remembers which command nonces already ran here
+
+    /// <summary>Ids of Wake-on-LAN requests this waker has already sent, so it won't re-send them.</summary>
+    [JsonPropertyName("completedWakes")]                     // maps JSON "completedWakes"
+    public List<string> CompletedWakes { get; set; } = new();     // remembers which wake nonces this waker sent
 }

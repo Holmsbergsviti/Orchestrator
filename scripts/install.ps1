@@ -38,7 +38,8 @@ param(
     [int]$IntervalMinutes = 0,                                   # sync interval in minutes (0 -> filled from defaults.json)
     [string]$InstallRoot = "",                                  # install folder (blank -> filled from defaults.json)
     [string]$SourceDir = "$PSScriptRoot\publish",               # folder that holds the built exe to copy from
-    [string]$DefaultsPath = ""                                  # override path to defaults.json (used when piped in remotely)
+    [string]$DefaultsPath = "",                                 # override path to defaults.json (used when piped in remotely)
+    [switch]$IsWaker                                            # mark this always-on machine as the Wake-on-LAN sender
 )
 
 $ErrorActionPreference = "Stop"                                 # abort on the first error
@@ -96,6 +97,7 @@ $config = [ordered]@{
         SyncIntervalMinutes = $IntervalMinutes    # minutes between sync cycles
         StartupRegistryKey  = $D.registryRunKey   # registry path for startup entries (from defaults.json)
         RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)
+        IsWaker             = [bool]$IsWaker       # true = this machine sends Wake-on-LAN packets for the fleet
     }
 }
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $settings -Encoding UTF8  # turn it into JSON text and save it

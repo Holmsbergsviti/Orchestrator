@@ -45,6 +45,9 @@ public sealed class Heartbeat
     [JsonPropertyName("lastError")]
     public string? LastError { get; set; }                     // first error from the last sync, if any (for quick triage)
 
+    [JsonPropertyName("macAddresses")]
+    public List<string> MacAddresses { get; set; } = new();    // this machine's NIC MACs (for Wake-on-LAN)
+
     /// <summary>
     /// A stable fingerprint of everything that MATTERS (i.e. not the timestamp). If this
     /// is unchanged from the last pushed heartbeat, the machine's situation hasn't really
@@ -58,5 +61,6 @@ public sealed class Heartbeat
             LastSyncSuccess.ToString(),
             ManifestVersion ?? "",
             string.Join(',', AppliedProgramIds),
+            string.Join(',', MacAddresses),
             LastError ?? "");
 }

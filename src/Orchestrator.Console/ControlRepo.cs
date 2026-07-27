@@ -64,6 +64,7 @@ public sealed class MachineView
     public string? ManifestVersion { get; set; }
     public string? LastError { get; set; }
     public List<string> AppliedProgramIds { get; set; } = new();
+    public string? Mac { get; set; }   // primary NIC MAC, for Wake-on-LAN
 }
 
 public sealed class StateResponse
@@ -122,6 +123,12 @@ public sealed class CommandRequest
     [JsonPropertyName("action")] public string Action { get; set; } = "";
 }
 
+/// <summary>Request to Wake-on-LAN one or more machines.</summary>
+public sealed class WakeApiRequest
+{
+    [JsonPropertyName("machineIds")] public List<string> MachineIds { get; set; } = new();
+}
+
 /// <summary>Request to add a new program to the manifest.</summary>
 public sealed class AddRequest
 {
@@ -156,6 +163,7 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("manifestVersion")] public string? ManifestVersion { get; set; }
     [JsonPropertyName("appliedProgramIds")] public List<string> AppliedProgramIds { get; set; } = new();
     [JsonPropertyName("lastError")] public string? LastError { get; set; }
+    [JsonPropertyName("macAddresses")] public List<string> MacAddresses { get; set; } = new();
 }
 
 // ---- service -------------------------------------------------------------------------
@@ -479,6 +487,55 @@ public sealed class ControlRepo
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
     }
 
+    /// <summary>Queue Wake-on-LAN requests for the given machines (by their reported MAC), then push.</summary>
+    public async Task<SaveResult> SendWakeAsync(List<string> machineIds, CancellationToken ct)
+    {
+        if (machineIds is null || machineIds.Count == 0) return Fail("No machines selected.");
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
+
+        // machine id -> primary MAC, from the heartbeats.
+        var macById = ReadHeartbeats()
+            .Where(h => h.MacAddresses.Count > 0)
+            .GroupBy(h => h.MachineId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().MacAddresses[0], StringComparer.OrdinalIgnoreCase);
+
+        const string cmdPath = "commands.json";
+        var full = Path.Combine(_opt.ControlRepoPath, cmdPath);
+        var root = File.Exists(full)
+            ? (JsonNode.Parse(File.ReadAllText(full), NodeOpts) as JsonObject ?? new JsonObject())
+            : new JsonObject();
+
+        var wake = new JsonArray();
+        var missing = 0;
+        foreach (var id in machineIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!macById.TryGetValue(id, out var mac)) { missing++; continue; }
+            wake.Add(new JsonObject
+            {
+                ["mac"] = mac,
+                ["machineId"] = id,
+                ["id"] = Guid.NewGuid().ToString("N"),
+                ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+            });
+        }
+        if (wake.Count == 0)
+            return Fail("None of the selected machines have a known MAC yet (they must have reported a heartbeat at least once).");
+
+        root["wake"] = wake;   // replace with the current batch (keeps commands.json bounded)
+        File.WriteAllText(full, root.ToJsonString(JsonWrite));
+
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: wake {wake.Count} machine(s) ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
+            var msg = $"Wake queued for {wake.Count} machine(s) — the waker sends the packets on its next sync.";
+            if (missing > 0) msg += $" ({missing} skipped: no MAC reported yet.)";
+            return new SaveResult { Ok = true, Message = msg, Commit = sha };
+        }
+        catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
     // ---- edit helpers ------------------------------------------------------------------
 
     /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.</summary>
@@ -667,7 +724,8 @@ public sealed class ControlRepo
             LastSyncSuccess = hb.LastSyncSuccess,
             ManifestVersion = hb.ManifestVersion,
             LastError = hb.LastError,
-            AppliedProgramIds = hb.AppliedProgramIds
+            AppliedProgramIds = hb.AppliedProgramIds,
+            Mac = hb.MacAddresses.FirstOrDefault()
         };
     }
 

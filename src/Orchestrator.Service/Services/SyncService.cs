@@ -291,21 +291,47 @@ public sealed class SyncService : ISyncService   // the actual implementation
         }
     }
 
-    /// <summary>Run a pending admin command (shutdown/restart) for this machine, once per command id.</summary>
+    /// <summary>Run a pending admin command for this machine, plus any Wake-on-LAN requests if this is the waker.</summary>
     private async Task HandleCommandsAsync(MachineConfig machine, CancellationToken ct)
     {
         var file = await _github.GetCommandsAsync(ct);   // commands.json (optional)
         if (file is null) return;
-        if (!file.Commands.TryGetValue(machine.MachineId, out var cmd)) return;   // nothing for this machine
-        if (string.IsNullOrEmpty(cmd.Id) || machine.CompletedCommands.Contains(cmd.Id)) return;   // already done / no id
 
-        // Record the id BEFORE acting so a delayed shutdown can't re-trigger after the machine reboots.
-        machine.CompletedCommands.Add(cmd.Id);
-        if (machine.CompletedCommands.Count > 100)                       // keep the list bounded
-            machine.CompletedCommands.RemoveRange(0, machine.CompletedCommands.Count - 100);
-        _configService.SaveMachineConfig(machine);
+        // This machine's own shutdown/restart command.
+        if (file.Commands.TryGetValue(machine.MachineId, out var cmd)
+            && !string.IsNullOrEmpty(cmd.Id) && !machine.CompletedCommands.Contains(cmd.Id))
+        {
+            // Record the id BEFORE acting so a delayed shutdown can't re-trigger after the machine reboots.
+            machine.CompletedCommands.Add(cmd.Id);
+            Trim(machine.CompletedCommands, 100);
+            _configService.SaveMachineConfig(machine);
+            ExecuteCommand(cmd);
+        }
 
-        ExecuteCommand(cmd);
+        // Wake-on-LAN requests are sent by the designated always-on waker (targets are powered off).
+        if (_config.IsWaker && file.Wake.Count > 0)
+        {
+            var sentAny = false;
+            foreach (var wr in file.Wake)
+            {
+                if (string.IsNullOrEmpty(wr.Id) || machine.CompletedWakes.Contains(wr.Id)) continue;
+                if (WakeSender.SendMagicPacket(wr.Mac, _log))
+                {
+                    machine.CompletedWakes.Add(wr.Id);
+                    sentAny = true;
+                }
+            }
+            if (sentAny)
+            {
+                Trim(machine.CompletedWakes, 1000);
+                _configService.SaveMachineConfig(machine);
+            }
+        }
+    }
+
+    private static void Trim(List<string> list, int max)
+    {
+        if (list.Count > max) list.RemoveRange(0, list.Count - max);
     }
 
     private void ExecuteCommand(MachineCommand cmd)

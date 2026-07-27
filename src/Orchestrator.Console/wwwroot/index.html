@@ -106,7 +106,7 @@
     <div id="warnings"></div>
 
     <div class="card">
-      <h2>Machines</h2>
+      <h2>Machines <button type="button" id="wakeAll" style="margin-left:10px; font-size:12px; padding:4px 10px">Wake all</button></h2>
       <div class="scroll">
         <table id="machines">
           <thead>
@@ -299,6 +299,10 @@
           el('button', { type: 'button', textContent: 'Restart', style: 'margin-left:6px', title: 'Reboot this machine on its next sync',
             onclick: () => sendCommand(m, 'restart') })
         ]);
+        if (m.mac) {
+          power.append(el('button', { type: 'button', textContent: 'Wake', style: 'margin-left:6px',
+            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => sendWake([m.machineId]) }));
+        }
         tb.append(el('tr', {}, [
           status,
           el('td', {}, labelInput),
@@ -564,6 +568,19 @@
       } catch (e) { toast('Delete failed: ' + e.message, true); }
     }
 
+    // Wake-on-LAN one or more machines (by id; the waker sends the packets).
+    async function sendWake(machineIds) {
+      if (!machineIds || machineIds.length === 0) { toast('No machines with a known MAC to wake', true); return; }
+      try {
+        const r = await fetch('/api/wake', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineIds })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) toast(res.commit ? `Wake queued · ${res.commit}` : (res.message || 'Wake queued'));
+        else toast('Wake failed: ' + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast('Wake failed: ' + e.message, true); }
+    }
+
     // Send a power command (shutdown/restart) to a machine.
     async function sendCommand(m, action) {
       const verb = action === 'shutdown' ? 'Shut down' : 'Restart';
@@ -602,6 +619,12 @@
       load();
     };
     $('#save').onclick = save;
+    $('#wakeAll').onclick = () => {
+      const ids = (state?.machines || []).filter(m => m.mac).map(m => m.machineId);
+      if (ids.length === 0) { toast('No machines with a known MAC', true); return; }
+      if (!confirm(`Wake all ${ids.length} machine(s) with a known MAC?`)) return;
+      sendWake(ids);
+    };
 
     fetch('/api/info').then(r => r.json()).then(i => { $('#repo').textContent = i.repoPath; }).catch(() => {});
     load();
