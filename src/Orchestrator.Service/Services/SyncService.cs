@@ -312,11 +312,12 @@ public sealed class SyncService : ISyncService   // the actual implementation
     {
         if (!OperatingSystem.IsWindows()) return;   // shutdown.exe is Windows-only
 
-        // 15s delay gives the user a heads-up and lets this sync cycle finish cleanly.
+        // /f force-closes apps so an open program can't block/cancel it (unattended fleet use);
+        // a short delay lets this sync cycle finish cleanly.
         var args = cmd.Action.Trim().ToLowerInvariant() switch
         {
-            "shutdown" => "/s /t 15 /c \"Remote shutdown requested via Orchestrator\"",
-            "restart"  => "/r /t 15 /c \"Remote restart requested via Orchestrator\"",
+            "shutdown" => "/s /f /t 5 /c \"Remote shutdown requested via Orchestrator\"",
+            "restart"  => "/r /f /t 5 /c \"Remote restart requested via Orchestrator\"",
             _ => null
         };
         if (args is null)
