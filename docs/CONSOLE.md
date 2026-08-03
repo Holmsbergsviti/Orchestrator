@@ -85,6 +85,20 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   capture into the **logged-on user's interactive session** — it does nothing if no one is
   signed in there. Once uploaded (to `screenshots/<machineId>/` on the `fleet-state` branch,
   alongside the heartbeats), a **View** link appears next to the button to open the latest one.
+- **Remote** (Machines table, Power column) — starts a **live remote-control session**: opens a
+  viewer tab that shows that machine's screen at roughly 5 fps. Needs one-time setup on both
+  ends first (`Console:AccessToken` + a certificate here, `Orchestrator:RelayUrl` there) —
+  see [SETUP.md](SETUP.md#7-optional-live-remote-control). Requirements and behaviour:
+  - The session starts on the machine's **next sync**, so the viewer waits (with a countdown)
+    for up to 15 minutes. Lower that machine's `SyncIntervalMinutes` for a faster start.
+  - Someone must be **signed in** on the target — the capture runs in their desktop session.
+  - A red **"Remote control active — click to end"** banner appears on the target for the whole
+    session. It can't be turned off, and clicking it ends the session immediately — that
+    override always wins over the console.
+  - Sessions end at `RemoteSessionMaxMinutes` (default 30) whatever the console is doing.
+  - Pending sessions live in the console's memory, so **restarting the console cancels them**;
+    just press Remote again.
+  - Mouse and keyboard control is not wired up yet (Phase 3) — the viewer is currently view-only.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.

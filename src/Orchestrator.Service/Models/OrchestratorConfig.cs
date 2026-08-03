@@ -64,6 +64,12 @@ public sealed class OrchestratorConfig
     /// sessions). Blank = the feature is unavailable on this machine.</summary>
     public string RelayUrl { get; set; } = string.Empty;
 
+    /// <summary>SHA-1 thumbprint of the console's HTTPS certificate, as shown by the console at
+    /// startup (spaces/colons are ignored). Set this when the console uses a self-signed
+    /// certificate: the agent then accepts exactly that one certificate and nothing else —
+    /// which is stricter than normal CA trust, not weaker. Blank = require normal chain trust.</summary>
+    public string RelayCertThumbprint { get; set; } = string.Empty;
+
     /// <summary>Hard cap on how long a single remote-control session may run before it's force-ended.</summary>
     public int RemoteSessionMaxMinutes { get; set; } = 30;
 

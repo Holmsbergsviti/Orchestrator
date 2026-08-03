@@ -4,8 +4,12 @@
 //   always-on-top, unmissable banner. It is NOT optional and there is no config flag to hide
 //   it: whoever is physically at the machine must always be able to see a session is active
 //   and end it themselves (click anywhere on the banner), regardless of what the console side
-//   wants. Built directly on the Win32 API (raw user32/gdi32 P/Invoke, same style as
-//   ScreenCaptureService's GetSystemMetrics use) rather than WinForms/WPF, specifically so
+//   wants. It doubles as the session's only on-machine status display: it comes up as soon as
+//   a session is attempted ("connecting…"), turns red once frames are actually flowing, and
+//   turns grey with the reason if the session can't start — so a failure is visible to whoever
+//   is at the keyboard instead of hiding in a log file. Built directly on the Win32 API (raw
+//   user32/gdi32 P/Invoke, same style as ScreenCaptureService's GetSystemMetrics use) rather
+//   than WinForms/WPF, specifically so
 //   this project keeps building and unit-testing on macOS/Linux — pulling in a UI framework
 //   (UseWindowsForms) makes the WHOLE assembly require the Windows Desktop runtime at load
 //   time, which would break `dotnet test` off Windows for every test, not just ones that
@@ -29,29 +33,46 @@ internal sealed class SessionBanner : IDisposable
     private const uint WM_APP_END = 0x8000 + 1;   // custom: "close this from another thread"
     private const int SW_SHOW = 5;
     private const uint DT_CENTER = 0x0001;
-    private const uint DT_VCENTER = 0x0004;
-    private const uint DT_SINGLELINE = 0x0020;
+    private const uint DT_WORDBREAK = 0x0010;
     private const int TRANSPARENT_BKMODE = 1;
     private const uint WS_POPUP = 0x80000000;
     private const uint WS_VISIBLE = 0x10000000;
     private const uint WS_EX_TOPMOST = 0x00000008;
     private const uint WS_EX_TOOLWINDOW = 0x00000080;   // no taskbar/alt-tab entry
     private const int SM_CXSCREEN = 0;
-    private const int SM_CYSCREEN = 1;
 
-    private const int Width = 320;
-    private const int Height = 64;
-    private const string Text = "Remote control active — click to end";
+    private const int Width = 380;
+    private const int Height = 84;
+    private const int TextPad = 10;   // inset so wrapped text doesn't touch the banner's edges
+
+    /// <summary>COLORREFs are 0x00BBGGRR (NOT RGB) — these read backwards on purpose.</summary>
+    public const int ColorActive = 0x002626DC;    // red: a session is live
+    public const int ColorPending = 0x00707070;   // grey: connecting, or failed to start
 
     private readonly Action _onEnd;
     private readonly WndProcDelegate _wndProc;   // keep alive: native code holds a pointer to this
     private readonly ManualResetEventSlim _closed = new(false);
+    private readonly object _stateLock = new();  // guards _text/_color against the UI thread's paint
+    private string _text;
+    private int _color;
     private IntPtr _hwnd;
 
-    public SessionBanner(Action onEnd)
+    public SessionBanner(string initialText, int initialColor, Action onEnd)
     {
+        _text = initialText;
+        _color = initialColor;
         _onEnd = onEnd;
         _wndProc = WndProc;   // capture the delegate instance once, not per-call
+    }
+
+    /// <summary>Change what the banner says (and its colour) from another thread. Safe to call
+    /// before the window exists — the new text is simply what the first paint will show.</summary>
+    public void SetState(string text, int color)
+    {
+        lock (_stateLock) { _text = text; _color = color; }
+        // InvalidateRect is one of the few window APIs that IS safe cross-thread: it just
+        // queues a WM_PAINT for the owning thread rather than drawing anything here.
+        if (_hwnd != IntPtr.Zero) InvalidateRect(_hwnd, IntPtr.Zero, erase: true);
     }
 
     /// <summary>Create and show the window, then pump this thread's Win32 message loop until
@@ -64,7 +85,9 @@ internal sealed class SessionBanner : IDisposable
             cbSize = (uint)Marshal.SizeOf<WNDCLASSEX>(),
             lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
             hInstance = hInstance,
-            hbrBackground = CreateSolidBrush(0x002626DC),   // COLORREF 0x00BBGGRR -> a red banner
+            // No class background brush: WM_PAINT fills the whole client area itself, which is
+            // both flicker-free and what lets the colour change with the session's state.
+            hbrBackground = IntPtr.Zero,
             lpszClassName = ClassName
         };
         if (RegisterClassExW(ref wc) == 0)
@@ -126,13 +149,25 @@ internal sealed class SessionBanner : IDisposable
         }
     }
 
-    private static void Paint(IntPtr hWnd)
+    private void Paint(IntPtr hWnd)
     {
+        string text;
+        int color;
+        lock (_stateLock) { text = _text; color = _color; }
+
         var hdc = BeginPaint(hWnd, out var ps);
         GetClientRect(hWnd, out var rect);
+
+        var brush = CreateSolidBrush(color);
+        FillRect(hdc, ref rect, brush);
+        DeleteObject(brush);
+
         SetBkMode(hdc, TRANSPARENT_BKMODE);
         SetTextColor(hdc, 0x00FFFFFF);   // white
-        DrawTextW(hdc, Text, Text.Length, ref rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        // Wrapped (not single-line) so a longer failure reason stays readable instead of
+        // running off the edge. No DT_VCENTER — Windows only honors it for single-line text.
+        var textRect = new RECT { Left = TextPad, Top = TextPad, Right = rect.Right - TextPad, Bottom = rect.Bottom - TextPad };
+        DrawTextW(hdc, text, text.Length, ref textRect, DT_CENTER | DT_WORDBREAK);
         EndPaint(hWnd, ref ps);
     }
 
@@ -210,8 +245,11 @@ internal sealed class SessionBanner : IDisposable
     [DllImport("user32.dll")] private static extern IntPtr BeginPaint(IntPtr hWnd, out PAINTSTRUCT lpPaint);
     [DllImport("user32.dll")] private static extern bool EndPaint(IntPtr hWnd, ref PAINTSTRUCT lpPaint);
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] private static extern int FillRect(IntPtr hdc, ref RECT lprc, IntPtr hbr);
+    [DllImport("user32.dll")] private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool erase);
 
     [DllImport("gdi32.dll")] private static extern IntPtr CreateSolidBrush(int crColor);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
     [DllImport("gdi32.dll")] private static extern int SetBkMode(IntPtr hdc, int mode);
     [DllImport("gdi32.dll")] private static extern int SetTextColor(IntPtr hdc, int crColor);
 

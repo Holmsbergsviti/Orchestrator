@@ -34,6 +34,9 @@
 .PARAMETER CodeRepo    Source repo hosting the exe + scripts (default: Holmsbergsviti/Orchestrator).
 .PARAMETER CodeRef     Branch of the source repo for scripts (default: main).
 .PARAMETER BuildFromSource  Build the exe locally instead of downloading it.
+.PARAMETER RelayUrl    ws(s):// address of the operator console's relay, for live remote control
+                       (the console prints the exact value at startup). Blank = feature off here.
+.PARAMETER RelayCertThumbprint  The console's certificate thumbprint; needed only if self-signed.
 #>
 # Marks this as an advanced script so it supports -Verbose, -ErrorAction, etc.
 [CmdletBinding()]
@@ -48,7 +51,9 @@ param(
     [string]$CodeRepo = "Holmsbergsviti/Orchestrator",  # repo that holds the exe + install scripts
     [string]$CodeRef = "main",                          # branch of that code repo to pull scripts from
     [switch]$BuildFromSource,                            # if set, compile locally instead of downloading
-    [switch]$IsWaker                                     # mark this always-on machine as the Wake-on-LAN sender
+    [switch]$IsWaker,                                    # mark this always-on machine as the Wake-on-LAN sender
+    [string]$RelayUrl = "",                              # console relay address for live remote control (blank = feature off here)
+    [string]$RelayCertThumbprint = ""                    # console's cert thumbprint; only needed if it's self-signed
 )
 
 $ErrorActionPreference = "Stop"  # stop the whole script the moment any command errors
@@ -159,6 +164,6 @@ $installText = (New-Object System.Net.WebClient).DownloadString("https://raw.git
 & ([scriptblock]::Create($installText)) `
     -RepoOwner $RepoOwner -RepoName $RepoName -Token $Token -Branch $Branch `
     -IntervalMinutes $IntervalMinutes -InstallRoot $InstallRoot -SourceDir $pub -DefaultsPath $defaultsFile `
-    -IsWaker:$IsWaker
+    -IsWaker:$IsWaker -RelayUrl $RelayUrl -RelayCertThumbprint $RelayCertThumbprint
 
 Write-Host "Bootstrap complete. Logs: $InstallRoot\logs" -ForegroundColor Green  # final success message + where to find logs

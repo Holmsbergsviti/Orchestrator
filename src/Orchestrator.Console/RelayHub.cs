@@ -9,10 +9,16 @@
 //   "keep listening for input with no agent attached" state. Frames flow agent->browser;
 //   input events flow browser->agent; each direction is just forwarded byte-for-byte,
 //   sight unseen, by whichever side's own connection handler owns that direction.
+//
+//   The relay also narrates itself to the viewer: small JSON *text* messages telling the
+//   browser whether it's still waiting for the agent, live, or giving up. Without those, a
+//   blank viewer is ambiguous — "the agent never connected" and "the agent is connected but
+//   sending nothing" look identical, and they have completely different fixes.
 // =====================================================================================
 
 using System.Collections.Concurrent;   // ConcurrentDictionary of in-flight sessions
 using System.Net.WebSockets;           // WebSocket / WebSocketMessageType
+using System.Text;                     // Encoding.UTF8 for the status messages
 
 namespace Orchestrator.Console;
 
@@ -25,6 +31,10 @@ public sealed class RelayHub
         public WebSocket? Viewer { get; set; }
         public WebSocket? Agent { get; set; }
         public readonly SemaphoreSlim Gate = new(1, 1);
+        // A socket tolerates one concurrent reader and one concurrent writer — but the viewer
+        // socket has TWO potential writers (the agent->viewer frame pump, and this class's own
+        // status messages), so every write to it goes through this gate.
+        public readonly SemaphoreSlim ViewerSendGate = new(1, 1);
         public readonly TaskCompletionSource BothConnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
         // Cancelling this is how one side tells the other's pump to stop — NOT by calling
         // CloseAsync on the peer's socket directly, which would race a concurrently pending
@@ -93,6 +103,8 @@ public sealed class RelayHub
         var remaining = s.ExpiresUtc - DateTimeOffset.UtcNow;
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCt.Token);
         waitCts.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.FromSeconds(1));
+        if (!isAgent)
+            await SendStatusAsync(s, $"{{\"t\":\"status\",\"state\":\"waiting\",\"untilUtc\":\"{s.ExpiresUtc.UtcDateTime:O}\"}}", linkedCt.Token);
         try
         {
             await s.BothConnected.Task.WaitAsync(waitCts.Token);
@@ -100,7 +112,9 @@ public sealed class RelayHub
         catch (OperationCanceledException)
         {
             SafeCancel(s.EndedCts);
-            await CloseAsync(socket, "timed out waiting for the other side to connect");
+            // Say WHICH side never arrived: "the agent never connected" and "you closed the
+            // viewer" are the same timeout here but completely different problems to chase.
+            await CloseAsync(socket, isAgent ? "no viewer connected in time" : "the agent never connected");
             _sessions.TryRemove(sessionId, out _);
             return;
         }
@@ -108,15 +122,24 @@ public sealed class RelayHub
         var other = isAgent ? s.Viewer : s.Agent;
         if (other is null) { await CloseAsync(socket, "internal error: peer missing"); return; }
 
+        if (!isAgent)
+            await SendStatusAsync(s, "{\"t\":\"status\",\"state\":\"connected\"}", linkedCt.Token);
+
         try
         {
             // Pump FROM this handler's OWN socket TO the peer. The peer's own connection
             // handler is doing the same in the other direction concurrently — one concurrent
             // reader and one concurrent writer per socket is the safe, documented pattern.
-            await PumpAsync(socket, other, linkedCt.Token);
+            await PumpAsync(socket, other, isAgent ? s.ViewerSendGate : null, linkedCt.Token);
         }
         finally
         {
+            // Say goodbye to the viewer BEFORE tearing anything down. Cancelling a pending
+            // ReceiveAsync aborts that socket, so once the teardown below starts, the viewer's
+            // close frame can no longer carry a reason and the browser only sees a bare 1006.
+            if (isAgent)
+                await SendStatusAsync(s, "{\"t\":\"status\",\"state\":\"ended\",\"reason\":\"the machine ended the session\"}", CancellationToken.None);
+
             // Tell the peer's pump (blocked in ReceiveAsync on ITS OWN socket) to stop, via
             // cancellation — never by touching the peer's socket from here.
             SafeCancel(s.EndedCts);
@@ -131,17 +154,51 @@ public sealed class RelayHub
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* already tearing down */ }
     }
 
-    private static async Task PumpAsync(WebSocket from, WebSocket to, CancellationToken ct)
+    /// <summary>Send one status line to the viewer. Best-effort: a viewer that has already gone
+    /// away is not a reason to disturb the session's own teardown path.</summary>
+    private static async Task SendStatusAsync(RelaySession s, string json, CancellationToken ct)
+    {
+        var viewer = s.Viewer;
+        if (viewer is null || viewer.State != WebSocketState.Open) return;
+        try
+        {
+            await s.ViewerSendGate.WaitAsync(ct);
+            try { await viewer.SendAsync(Encoding.UTF8.GetBytes(json), WebSocketMessageType.Text, endOfMessage: true, ct); }
+            finally { s.ViewerSendGate.Release(); }
+        }
+        catch { /* best effort — the viewer may be mid-disconnect */ }
+    }
+
+    /// <summary><paramref name="toGate"/> must be supplied whenever the destination socket can
+    /// also be written to from elsewhere (the viewer). Null means this pump is the only writer.</summary>
+    private static async Task PumpAsync(WebSocket from, WebSocket to, SemaphoreSlim? toGate, CancellationToken ct)
     {
         var buffer = new byte[64 * 1024];
-        while (from.State == WebSocketState.Open && to.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        var holdingGate = false;   // true while we're partway through forwarding one fragmented message
+        try
         {
-            WebSocketReceiveResult result;
-            try { result = await from.ReceiveAsync(new ArraySegment<byte>(buffer), ct); }
-            catch { break; }
-            if (result.MessageType == WebSocketMessageType.Close) break;
-            try { await to.SendAsync(new ArraySegment<byte>(buffer, 0, result.Count), result.MessageType, result.EndOfMessage, ct); }
-            catch { break; }
+            while (from.State == WebSocketState.Open && to.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                WebSocketReceiveResult result;
+                try { result = await from.ReceiveAsync(new ArraySegment<byte>(buffer), ct); }
+                catch { break; }
+                if (result.MessageType == WebSocketMessageType.Close) break;
+                try
+                {
+                    // A screen frame is far bigger than this buffer, so it arrives (and is
+                    // re-sent) as several fragments. Hold the gate from the first fragment to
+                    // the last: slipping another message's frames in between would corrupt
+                    // both messages, since WebSocket data frames can't be interleaved.
+                    if (toGate is not null && !holdingGate) { await toGate.WaitAsync(ct); holdingGate = true; }
+                    await to.SendAsync(new ArraySegment<byte>(buffer, 0, result.Count), result.MessageType, result.EndOfMessage, ct);
+                    if (holdingGate && result.EndOfMessage) { toGate!.Release(); holdingGate = false; }
+                }
+                catch { break; }
+            }
+        }
+        finally
+        {
+            if (holdingGate) toGate!.Release();
         }
     }
 

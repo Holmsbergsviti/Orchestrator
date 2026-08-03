@@ -28,6 +28,12 @@ var configArgs = repoArg is null ? args : args[1..];
 
 var builder = WebApplication.CreateBuilder(configArgs);
 
+// Secrets (AccessToken, CertPfxPassword) must NOT go in appsettings.json — that file is
+// committed. appsettings.Local.json sits next to it, is gitignored, and overrides it. The
+// command line is re-added afterwards so an explicit --Console:... switch still wins.
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+if (configArgs.Length > 0) builder.Configuration.AddCommandLine(configArgs);
+
 // Bind the "Console" settings section (also honors --Console:ControlRepoPath=... etc).
 var opt = new ConsoleOptions();
 builder.Configuration.GetSection(ConsoleOptions.SectionName).Bind(opt);
@@ -328,10 +334,39 @@ app.MapGet("/api/info", (ControlRepo r) => Results.Ok(new { repoPath = r.RepoPat
 
 System.Console.WriteLine($"Orchestrator console driving repo: {opt.ControlRepoPath}");
 System.Console.WriteLine($"Open {listenUrl} in your browser.");
+
+// Remote control only works if each agent knows how to call BACK to this exact listener, and
+// there's no way for it to discover that on its own. Print the two settings verbatim so they
+// can be copied into the agent's install command instead of guessed at.
+System.Console.WriteLine();
+System.Console.WriteLine("Remote control — settings for the agents (see docs/SETUP.md):");
+System.Console.WriteLine($"  Orchestrator:RelayUrl            = {DeriveRelayUrl(listenUrl)}");
+if (cert is not null)
+    System.Console.WriteLine($"  Orchestrator:RelayCertThumbprint = {cert.Thumbprint}   (needed if this certificate is self-signed)");
+if (isLocalOnly)
+    System.Console.WriteLine("  NOTE: this console is bound to localhost, so only an agent on THIS machine can reach it.\n" +
+                             "        To control other machines, set Urls to https://0.0.0.0:<port> (which also requires\n" +
+                             "        Console:AccessToken and Console:CertPfxPath).");
+System.Console.WriteLine();
+
 if (opt.OpenBrowser) TryOpenBrowser(listenUrl);
 
 app.Run();
 return 0;
+
+// Turn the console's own listen address into the ws(s):// address an agent should dial.
+static string DeriveRelayUrl(string urls)
+{
+    var first = urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "";
+    // Kestrel accepts "*" and "+" as "any host"; neither is a legal URI host, so swap in a
+    // placeholder before parsing and leave it visible — only the operator knows the real address.
+    const string anyHost = "<this-pc-ip-or-hostname>";
+    var parseable = first.Replace("://*:", $"://{anyHost}:").Replace("://+:", $"://{anyHost}:");
+    if (!Uri.TryCreate(parseable, UriKind.Absolute, out var uri)) return "(could not derive from Urls)";
+    var scheme = uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
+    var host = uri.Host is "0.0.0.0" or "::" ? anyHost : uri.Host;
+    return $"{scheme}://{host}:{uri.Port}";
+}
 
 // Best-effort: launch the default browser on the local URL.
 static void TryOpenBrowser(string url)

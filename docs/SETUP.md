@@ -78,6 +78,74 @@ It opens `http://localhost:5080`, shows every machine that has reported, and let
 them and pick which machines run which program — then commits and pushes for you. Full guide:
 [docs/CONSOLE.md](CONSOLE.md).
 
+## 7. (Optional) Live remote control
+
+Screenshots and commands travel through GitHub, but a live screen can't — it needs a direct
+connection. The console itself hosts the relay, and each agent dials **out** to it, so the
+fleet machines need no inbound ports. Only the console's own port has to be reachable.
+
+Nothing here is auto-discovered: an agent that doesn't know the relay address simply never
+starts a session. Configure both ends.
+
+### a. Expose the console
+
+Bound to `localhost` (the default) the console can only relay for an agent on the *same* PC.
+To control other machines, bind it wider — which requires an access token **and** HTTPS, and
+the console refuses to start otherwise:
+
+```json
+{
+  "Console": {
+    "AccessToken": "<a long random string — this is your fleet's password>",
+    "CertPfxPath": "C:\\path\\to\\console.pfx",
+    "CertPfxPassword": "<pfx password>"
+  },
+  "Urls": "https://0.0.0.0:5080"
+}
+```
+
+No certificate yet? A self-signed one is fine — the agents pin it by thumbprint (see below),
+which is stricter than ordinary CA trust:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 825 -nodes \
+  -subj "/CN=orchestrator-console"
+```
+
+```bash
+openssl pkcs12 -export -out console.pfx -inkey key.pem -in cert.pem
+```
+
+Your **browser** will warn about a self-signed certificate the first time; accept it once.
+Open the firewall for the port, and if you're reaching the console from outside your LAN,
+forward that port to it.
+
+### b. Point the agents at it
+
+Start the console and it prints exactly what to use:
+
+```text
+Remote control — settings for the agents (see docs/SETUP.md):
+  Orchestrator:RelayUrl            = wss://<this-pc-ip-or-hostname>:5080
+  Orchestrator:RelayCertThumbprint = BB9818E4E3767461412AC207AA1BA77B7EED112F
+```
+
+Pass both when installing each machine you want to control (substitute the real address for
+the placeholder — only you know whether agents reach this PC by LAN IP, hostname, or a public
+name):
+
+```powershell
+.\scripts\install.ps1 -RepoOwner <you> -RepoName control-repo -Token ghp_xxx `
+    -RelayUrl wss://192.168.1.20:5080 -RelayCertThumbprint BB9818E4E3767461412AC207AA1BA77B7EED112F
+```
+
+Drop `-RelayCertThumbprint` if the console uses a certificate from a real CA. `install.ps1`
+rewrites `appsettings.json` from scratch every run, so pass these as parameters rather than
+hand-editing the file — an edit would be wiped on the next upgrade.
+
+Then use **Remote** in the console (see [CONSOLE.md](CONSOLE.md)). A session starts on that
+machine's next sync, so lower `-IntervalMinutes` on machines you want to reach quickly.
+
 ## Public repos
 Omit `-Token`. The service calls the GitHub API anonymously (lower rate limit, 60/hr).
 Heartbeats need a writable token, so with a public/anonymous setup set `ReportState: false`.

@@ -58,6 +58,38 @@ Startup registration depends on `runAsAdmin`:
 - Cleanup removes both startup mechanisms (Run value and Scheduled Task), so a program that
   had `runAsAdmin` toggled still gets fully unregistered.
 
+## Remote control: the viewer never shows a picture
+The viewer tab says what stage it's stuck at — read that first, then match it below. The
+target machine also shows a banner with the reason, and logs it to `logs\log-*.txt` there.
+
+**"Waiting for … to pick up the request"** — the agent hasn't connected yet.
+- It only starts on that machine's **next sync**. Wait one `SyncIntervalMinutes`.
+- Nobody signed in on that machine? Then it can't run: the capture needs a desktop session,
+  and the log says `no interactive user is logged on`.
+
+**No banner ever appears on the target** — the session process quit immediately.
+- Almost always `Orchestrator:RelayUrl` is empty there. Check it:
+  ```powershell
+  Get-Content C:\Windows\Orch\appsettings.json | Select-String Relay
+  ```
+  Fix by re-running `install.ps1` with `-RelayUrl` ([SETUP.md](SETUP.md#7-optional-live-remote-control)).
+  Editing the file by hand works until the next install rewrites it.
+
+**The banner appears, turns grey, and names a reason** — that reason is the fix:
+- *"certificate isn't trusted"* → the console's cert is self-signed; set
+  `-RelayCertThumbprint` to the value the console prints at startup.
+- *"didn't match RelayCertThumbprint"* → the certificate changed (a regenerated PFX makes a
+  new thumbprint). Re-copy it.
+- *"couldn't reach the console"* → the console isn't running, is still bound to `localhost`,
+  or the port is blocked. `Urls` must be `https://0.0.0.0:<port>`, not `localhost`.
+- *"rejected this session token"* → the console restarted after you pressed Remote. Press it again.
+
+**"This console doesn't recognise the session"** — same cause: pending sessions are held in
+memory only, so a console restart cancels them.
+
+**The picture is live but frozen or black** — capture returns nothing while the workstation is
+locked, on the UAC secure desktop, or after an RDP disconnect. It resumes on its own.
+
 ## Force an immediate sync
 ```powershell
 Restart-Service GitHubOrchestrator   # first cycle runs on start

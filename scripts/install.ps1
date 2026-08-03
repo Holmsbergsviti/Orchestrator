@@ -25,9 +25,18 @@
 .PARAMETER InstallRoot  Install directory (blank = value from defaults.json).
 .PARAMETER SourceDir    Folder holding published binaries (default: .\publish).
 .PARAMETER DefaultsPath Path to defaults.json; used when the script is piped in remotely.
+.PARAMETER RelayUrl     ws(s):// address of the operator console's relay, for live remote control.
+                        The console prints the exact value to use when it starts. Leave blank to
+                        leave remote control unavailable on this machine.
+.PARAMETER RelayCertThumbprint  The console's HTTPS certificate thumbprint (it prints this too).
+                        Required only when that certificate is self-signed.
 
 .EXAMPLE
     .\install.ps1 -RepoOwner acme -RepoName orchestrator-repo -Token ghp_xxx
+
+.EXAMPLE
+    .\install.ps1 -RepoOwner acme -RepoName orchestrator-repo -Token ghp_xxx `
+        -RelayUrl wss://192.168.1.20:5080 -RelayCertThumbprint A1B2C3...
 #>
 [CmdletBinding()]                                                # enable common parameters (-Verbose, -ErrorAction, ...)
 param(
@@ -39,7 +48,9 @@ param(
     [string]$InstallRoot = "",                                  # install folder (blank -> filled from defaults.json)
     [string]$SourceDir = "$PSScriptRoot\publish",               # folder that holds the built exe to copy from
     [string]$DefaultsPath = "",                                 # override path to defaults.json (used when piped in remotely)
-    [switch]$IsWaker                                            # mark this always-on machine as the Wake-on-LAN sender
+    [switch]$IsWaker,                                           # mark this always-on machine as the Wake-on-LAN sender
+    [string]$RelayUrl = "",                                     # console relay address for live remote control (blank = feature off here)
+    [string]$RelayCertThumbprint = ""                           # console's cert thumbprint; only needed if it's self-signed
 )
 
 $ErrorActionPreference = "Stop"                                 # abort on the first error
@@ -98,6 +109,11 @@ $config = [ordered]@{
         StartupRegistryKey  = $D.registryRunKey   # registry path for startup entries (from defaults.json)
         RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)
         IsWaker             = [bool]$IsWaker       # true = this machine sends Wake-on-LAN packets for the fleet
+        # Live remote control. This file is rewritten from scratch on every install, so anything
+        # missing here is silently reset to its built-in default — which is exactly how a
+        # hand-edited RelayUrl would disappear on the next upgrade. Pass it as a parameter instead.
+        RelayUrl            = $RelayUrl            # console relay address; blank = remote control unavailable here
+        RelayCertThumbprint = $RelayCertThumbprint # pin for a self-signed console certificate; blank = require normal CA trust
     }
 }
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $settings -Encoding UTF8  # turn it into JSON text and save it
@@ -125,3 +141,11 @@ sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/re
 Write-Host "Starting service..."
 Start-Service -Name $ServiceName                                            # start it now (this triggers the first sync)
 Write-Host "Done. Service '$ServiceName' is running. Logs: $InstallRoot\logs" -ForegroundColor Green  # success message
+
+# Say plainly whether remote control will work here — otherwise the first sign of trouble is a
+# viewer window that never shows a picture, with nothing on this machine explaining why.
+if ($RelayUrl) {
+    Write-Host "Live remote control: enabled (relay $RelayUrl)." -ForegroundColor Green
+} else {
+    Write-Host "Live remote control: NOT configured. Re-run with -RelayUrl <the address the console prints> to enable it." -ForegroundColor Yellow
+}

@@ -5,6 +5,11 @@
   each incoming JPEG frame to a canvas, and (once Phase 3 lands) will forward mouse/keyboard
   events back over the same socket. Phase 2 is view-only — there's no input capture wired up
   here yet.
+
+  It also reports exactly which stage the session is at, because a black canvas on its own
+  says nothing: waiting for the target machine to notice the request, connected but no frames
+  yet, or given up. The relay sends those stages as JSON text messages; frames arrive as
+  binary, so the two never get confused.
 -->
 <html lang="en">
 <head>
@@ -24,7 +29,10 @@
     button:hover { border-color: #4b5563; }
     main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #000; }
     canvas { max-width: 100%; max-height: 100%; }
-    .msg { color: #9ca3af; font-size: 13px; padding: 0 20px; text-align: center; }
+    .msg { color: #9ca3af; font-size: 13px; padding: 0 20px; text-align: center; max-width: 640px; }
+    .msg h2 { font-size: 14px; color: #e5e7eb; margin: 0 0 8px; font-weight: 600; }
+    .msg ul { text-align: left; margin: 12px 0 0; padding-left: 20px; line-height: 1.7; }
+    .msg code { background: #1f2937; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -35,40 +43,115 @@
     <button id="end">End session</button>
   </header>
   <main>
-    <div class="msg" id="waiting">Waiting for the agent to connect — this can take up to that machine's sync interval, and needs someone signed in there.</div>
+    <div class="msg" id="waiting">Connecting to the relay…</div>
     <canvas id="canvas" hidden></canvas>
   </main>
   <script>
+    // Everything below builds HTML by hand, and both the label (from the URL) and close
+    // reasons (from the relay) end up inside it — so they go through esc() first.
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
     const params = new URLSearchParams(location.search);
     const sessionId = params.get('sessionId');
-    const label = params.get('label') || params.get('machineId') || '';
-    document.getElementById('title').textContent = 'Remote control — ' + label;
+    const label = esc(params.get('label') || params.get('machineId') || '');
+    document.getElementById('title').textContent = 'Remote control — ' + (params.get('label') || params.get('machineId') || '');
 
     const statusEl = document.getElementById('status');
     const waitingEl = document.getElementById('waiting');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
 
-    function showEnded(text) {
-      statusEl.textContent = text;
-      waitingEl.textContent = text;
+    let opened = false;      // did the WebSocket handshake ever succeed?
+    let agentJoined = false; // did the target machine's agent connect?
+    let countdown = null;    // interval id for the "waiting" timer
+    let endReason = null;    // reason the relay told us, before the socket dropped
+
+    // The list below is the whole point of this page's error handling: every one of these is
+    // a real way a session silently produces no picture, and none of them are visible from here.
+    const checklist = `
+      <ul>
+        <li><code>Orchestrator:RelayUrl</code> must be set in that machine's <code>appsettings.json</code>
+            (install with <code>-RelayUrl</code>) — if it's blank, the session exits immediately.</li>
+        <li>Someone must be signed in on that machine — the capture runs in their desktop session.</li>
+        <li>This console must be reachable from it: bound beyond localhost, and through the firewall.</li>
+        <li>With a self-signed certificate, that machine needs <code>Orchestrator:RelayCertThumbprint</code> set.</li>
+      </ul>
+      <p>The banner on that machine shows the reason; its log is in the install folder under <code>logs\\</code>.</p>`;
+
+    function showMessage(html, statusText) {
+      statusEl.textContent = statusText;
+      waitingEl.innerHTML = html;
       waitingEl.hidden = false;
       canvas.hidden = true;
+      if (countdown) { clearInterval(countdown); countdown = null; }
+    }
+
+    // Count down the window the relay will hold the session open waiting for the agent, so the
+    // wait has a visible end instead of looking indistinguishable from a hang.
+    function showWaiting(untilUtc) {
+      const until = Date.parse(untilUtc);
+      const render = () => {
+        const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+        const mins = String(Math.floor(left / 60)).padStart(2, '0');
+        const secs = String(left % 60).padStart(2, '0');
+        waitingEl.innerHTML =
+          `<h2>Waiting for ${label || 'the machine'} to pick up the request…</h2>` +
+          `<p>It starts on that machine's next sync, so this can take a few minutes. Giving up in ${mins}:${secs}.</p>`;
+        statusEl.textContent = 'Waiting for the machine';
+      };
+      render();
+      countdown = setInterval(render, 1000);
     }
 
     if (!sessionId) {
-      showEnded('Missing sessionId in the URL.');
+      showMessage('<h2>Missing sessionId in the URL.</h2><p>Open this page with the console’s Remote button.</p>', 'No session');
     } else {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${proto}//${location.host}/relay/view?sessionId=${encodeURIComponent(sessionId)}`);
       ws.binaryType = 'arraybuffer';
 
-      ws.onopen = () => { statusEl.textContent = 'Connected — waiting for the first frame…'; };
-      ws.onclose = () => showEnded('Session ended.');
-      ws.onerror = () => { statusEl.textContent = 'Connection error.'; };
+      ws.onopen = () => { opened = true; statusEl.textContent = 'Connected to relay'; };
+
+      ws.onclose = (ev) => {
+        if (!opened) {
+          // Rejected at the handshake: the relay only knows sessions it issued and still holds
+          // in memory, so a console restart between queueing and opening this page lands here.
+          showMessage(
+            '<h2>This console doesn’t recognise the session.</h2>' +
+            '<p>Pending sessions are held in memory, so restarting the console cancels them. ' +
+            'Close this tab and press <b>Remote</b> again.</p>', 'Unknown session');
+          return;
+        }
+        // An abrupt drop (code 1006) carries no reason, so prefer what the relay told us
+        // over the socket's own — that's the difference between "the machine ended the
+        // session" and a blank "the connection closed".
+        const reason = esc(ev.reason || endReason || 'the connection closed');
+        if (!agentJoined) {
+          showMessage(`<h2>Gave up: ${reason}.</h2><p>Things to check on that machine:</p>${checklist}`, 'Ended');
+        } else {
+          showMessage(`<h2>Session ended.</h2><p>${reason}.</p>`, 'Ended');
+        }
+      };
+
+      ws.onerror = () => { if (opened) statusEl.textContent = 'Connection error'; };
 
       ws.onmessage = async (ev) => {
-        if (!(ev.data instanceof ArrayBuffer)) return;   // ignore any stray text frames
+        // Text = a status line from the relay; binary = an actual screen frame.
+        if (typeof ev.data === 'string') {
+          let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+          if (msg.t !== 'status') return;
+          if (msg.state === 'waiting') showWaiting(msg.untilUtc);
+          if (msg.state === 'ended') endReason = msg.reason || 'the session ended';
+          if (msg.state === 'connected') {
+            agentJoined = true;
+            showMessage(
+              `<h2>${label || 'The machine'} connected.</h2><p>Waiting for the first frame…</p>`,
+              'Waiting for a frame');
+          }
+          return;
+        }
+        if (!(ev.data instanceof ArrayBuffer)) return;
         const blob = new Blob([ev.data], { type: 'image/jpeg' });
         const bitmap = await createImageBitmap(blob);
         if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
@@ -77,7 +160,12 @@
         }
         ctx.drawImage(bitmap, 0, 0);
         bitmap.close();
-        if (canvas.hidden) { canvas.hidden = false; waitingEl.hidden = true; statusEl.textContent = 'Live'; }
+        if (canvas.hidden) {
+          if (countdown) { clearInterval(countdown); countdown = null; }
+          canvas.hidden = false;
+          waitingEl.hidden = true;
+          statusEl.textContent = 'Live';
+        }
       };
 
       document.getElementById('end').onclick = () => ws.close();

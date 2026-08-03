@@ -89,6 +89,19 @@ program never runs at boot, and it launches in the interactive user session.
 sends WoL magic packets (`WakeSender`) for `wake` requests to the target MACs reported in heartbeats.
 Only works within a LAN segment (broadcast) — one waker per broadcast domain.
 
+**Live remote control is the one feature that does NOT flow through git.** A screen can't stream
+over commit polling, so the console hosts a WebSocket relay (`RelayHub`) and the agent dials
+*out* to it (`RemoteSessionService` → `Orchestrator:RelayUrl`); git only carries the session
+nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequences to keep in mind:
+- **`RelayUrl` must be configured per machine or the feature is silently unavailable there.**
+  `install.ps1` rewrites `appsettings.json` wholesale, so any new agent setting must be added
+  as an installer parameter too, or it resets to its default on the next install.
+- Pending sessions live in `RelayHub`'s memory — restarting the console cancels them.
+- Non-localhost `Urls` forces `Console:AccessToken` + a cert (fail-fast in `Program.cs`). Agents
+  pin a self-signed cert by SHA-1 thumbprint (`RelayCertThumbprint`); the console prints it at startup.
+- Failures must stay visible on both ends: the target's `SessionBanner` shows the reason, and
+  `RelayHub` sends the viewer JSON status text messages (frames are binary, so they never collide).
+
 ## Console specifics
 
 - Manifest edits go through a **JSON DOM** (`System.Text.Json.Nodes`), not deserialize/reserialize, so
