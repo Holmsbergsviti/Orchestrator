@@ -36,6 +36,16 @@ if (OperatingSystem.IsWindows())                       // these commands only ma
 if ((args.Length > 0 ? args[0].ToLowerInvariant() : null) == "run-program")
     return RunLauncher(args);
 
+// Screenshot capture: scheduled into the logged-on user's session by ScheduledTaskService
+// (the service itself runs in session 0, with no desktop). Captures + uploads, then exits.
+if ((args.Length > 0 ? args[0].ToLowerInvariant() : null) == "capture-screenshot")
+    return RunScreenshotCapture(args);
+
+// Live remote-control session: scheduled into the logged-on user's session the same way.
+// Runs until the banner is closed, the relay disconnects, or the session times out.
+if ((args.Length > 0 ? args[0].ToLowerInvariant() : null) == "remote-session")
+    return RunRemoteSession(args);
+
 // Bootstrap logger for early failures before the host is built.
 Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();  // a basic console logger for very-early errors
 
@@ -93,6 +103,77 @@ static int RunLauncher(string[] args)
     catch (Exception ex)
     {
         Console.Error.WriteLine($"run-program failed: {ex.Message}");
+        return 1;
+    }
+    finally
+    {
+        Log.CloseAndFlush();
+    }
+}
+
+// Runs "capture-screenshot <requestId>": build the same minimal host as the run-program
+// launcher, resolve the screenshot service, capture the screen, and upload it.
+static int RunScreenshotCapture(string[] args)
+{
+    var id = args.Length > 1 ? args[1] : null;
+    if (string.IsNullOrWhiteSpace(id))
+    {
+        Console.Error.WriteLine("usage: capture-screenshot <requestId>");
+        return 2;
+    }
+    try
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory
+        });
+        ServiceRegistration.AddOrchestratorSerilog(builder);
+        ServiceRegistration.AddOrchestratorServices(builder);
+
+        using var host = builder.Build();
+        var screenshots = host.Services.GetRequiredService<IScreenshotService>();
+        return screenshots.CaptureAndUploadAsync(id, CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"capture-screenshot failed: {ex.Message}");
+        return 1;
+    }
+    finally
+    {
+        Log.CloseAndFlush();
+    }
+}
+
+// Runs "remote-session <sessionId>": build the same minimal host as the other interactive
+// verbs, resolve the remote-session service, and run it — this call blocks for the whole
+// session (banner shown, frames streamed) and only returns once the session has ended.
+static int RunRemoteSession(string[] args)
+{
+    var id = args.Length > 1 ? args[1] : null;
+    if (string.IsNullOrWhiteSpace(id))
+    {
+        Console.Error.WriteLine("usage: remote-session <sessionId>");
+        return 2;
+    }
+    try
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory
+        });
+        ServiceRegistration.AddOrchestratorSerilog(builder);
+        ServiceRegistration.AddOrchestratorServices(builder);
+
+        using var host = builder.Build();
+        var session = host.Services.GetRequiredService<IRemoteSessionService>();
+        return session.RunAsync(id, CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"remote-session failed: {ex.Message}");
         return 1;
     }
     finally

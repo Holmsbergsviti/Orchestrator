@@ -44,6 +44,7 @@
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />                      <!-- IHttpClientFactory -->
     <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />                       <!-- read/write the registry -->
     <PackageReference Include="System.Management" Version="8.0.0" />                               <!-- WMI: find running processes by file path (kill-on-delete) -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />                           <!-- screen capture (Bitmap/Graphics.CopyFromScreen) for the screenshot command -->
     <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />                     <!-- Serilog logging integration -->
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />                             <!-- write logs to files -->
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />                          <!-- write logs to the console -->

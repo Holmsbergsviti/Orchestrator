@@ -30,6 +30,34 @@ public sealed class GitRepo(string repoPath)
     public string? ReadFileFromRef(string refSpec, string path)
         => TryRun(out var stdout, out _, "show", $"{refSpec}:{path}") ? stdout : null;
 
+    /// <summary>Read a file's raw bytes from a specific ref (for binary content like a screenshot
+    /// JPEG). Reads the process's stdout stream directly so no text encoding can corrupt the bytes.
+    /// Null if the file doesn't exist on that ref.</summary>
+    public byte[]? ReadFileBytesFromRef(string refSpec, string path)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = RepoPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("show");
+        psi.ArgumentList.Add($"{refSpec}:{path}");
+
+        using var proc = new Process { StartInfo = psi };
+        proc.Start();
+        // Read stdout (raw bytes, bypassing the TextReader) and stderr concurrently — reading
+        // them one after the other risks a pipe-buffer deadlock once the image gets large.
+        using var ms = new MemoryStream();
+        var outTask = proc.StandardOutput.BaseStream.CopyToAsync(ms);
+        var errTask = proc.StandardError.ReadToEndAsync();
+        Task.WaitAll(outTask, errTask);
+        proc.WaitForExit();
+        return proc.ExitCode == 0 ? ms.ToArray() : null;
+    }
+
     /// <summary>List file names directly under a directory on a ref (e.g. state/*.json on origin/fleet-state).</summary>
     public IReadOnlyList<string> ListDirOnRef(string refSpec, string dir)
     {

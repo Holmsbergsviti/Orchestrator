@@ -93,4 +93,28 @@ public sealed class ScheduledTaskServiceTests
         var body = xml[(xml.IndexOf('\n') + 1)..];
         Assert.Null(Record.Exception(() => System.Xml.Linq.XDocument.Parse(body)));
     }
+
+    [Fact]
+    public void BuildInteractiveCaptureXml_RunsAsInteractiveUser_OnceThenSelfDeletes()
+    {
+        var xml = ScheduledTaskService.BuildInteractiveCaptureXml(
+            @"C:\orch.exe", "capture-screenshot abc123", @"PC\Alice", new DateTime(2026, 7, 25, 10, 0, 0));
+
+        Assert.Contains(@"<UserId>PC\Alice</UserId>", xml);                   // the logged-on user
+        Assert.Contains("<LogonType>InteractiveToken</LogonType>", xml);     // their interactive session, no password
+        Assert.Contains("<TimeTrigger>", xml);                               // fires once, soon
+        Assert.Contains("<DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>", xml);  // self-cleans
+        Assert.Contains(@"<Command>C:\orch.exe</Command>", xml);             // the orchestrator exe itself
+        Assert.Contains("<Arguments>capture-screenshot abc123</Arguments>", xml);
+        Assert.DoesNotContain("<WorkingDirectory>", xml);                    // no install folder to run from
+    }
+
+    [Fact]
+    public void BuildInteractiveCaptureXml_IsWellFormedXml()
+    {
+        var xml = ScheduledTaskService.BuildInteractiveCaptureXml(
+            @"C:\orch.exe", "capture-screenshot \"q\"", @"PC\Bob", DateTime.Now);
+        var body = xml[(xml.IndexOf('\n') + 1)..];
+        Assert.Null(Record.Exception(() => System.Xml.Linq.XDocument.Parse(body)));
+    }
 }

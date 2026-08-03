@@ -60,6 +60,13 @@ public sealed class OrchestratorConfig
     /// <summary>If true, this (always-on) machine sends Wake-on-LAN magic packets for wake requests.</summary>
     public bool IsWaker { get; set; } = false;   // set true on one always-on machine per network segment
 
+    /// <summary>wss:// address of the console's relay (only needed if you use live remote-control
+    /// sessions). Blank = the feature is unavailable on this machine.</summary>
+    public string RelayUrl { get; set; } = string.Empty;
+
+    /// <summary>Hard cap on how long a single remote-control session may run before it's force-ended.</summary>
+    public int RemoteSessionMaxMinutes { get; set; } = 30;
+
     [JsonIgnore] public string ProgramsPath => Path.Combine(RootPath, "programs");                    // <root>\programs — installed program files
     [JsonIgnore] public string LogsPath => Path.Combine(RootPath, "logs");                            // <root>\logs — log files
     [JsonIgnore] public string CachePath => Path.Combine(RootPath, "cache");                          // <root>\cache — remembered state
@@ -97,4 +104,12 @@ public sealed class MachineConfig
     /// <summary>Ids of Wake-on-LAN requests this waker has already sent, so it won't re-send them.</summary>
     [JsonPropertyName("completedWakes")]                     // maps JSON "completedWakes"
     public List<string> CompletedWakes { get; set; } = new();     // remembers which wake nonces this waker sent
+
+    /// <summary>Ids of screenshot requests already scheduled here, so a request only captures once.</summary>
+    [JsonPropertyName("completedScreenshots")]               // maps JSON "completedScreenshots"
+    public List<string> CompletedScreenshots { get; set; } = new();  // remembers which screenshot nonces already ran here
+
+    /// <summary>Ids of remote-control session requests already scheduled here, so a request only starts once.</summary>
+    [JsonPropertyName("completedRemoteSessions")]             // maps JSON "completedRemoteSessions"
+    public List<string> CompletedRemoteSessions { get; set; } = new();  // remembers which session nonces already ran here
 }

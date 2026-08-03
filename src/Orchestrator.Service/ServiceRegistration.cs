@@ -48,6 +48,9 @@ public static class ServiceRegistration
         builder.Services.AddSingleton<IFleetReporter, FleetReporter>();
         builder.Services.AddSingleton<ISyncService, SyncService>();
         builder.Services.AddSingleton<IProgramLauncher, ProgramLauncher>();
+        builder.Services.AddSingleton<IScreenCaptureService, ScreenCaptureService>();
+        builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
+        builder.Services.AddSingleton<IRemoteSessionService, RemoteSessionService>();
     }
 
     /// <summary>Serilog: daily-rolling file under &lt;RootPath&gt;\logs plus console.</summary>

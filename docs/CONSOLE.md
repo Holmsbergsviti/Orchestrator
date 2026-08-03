@@ -79,6 +79,12 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   with `-IsWaker` (or `"IsWaker": true` in its appsettings), enable WoL in each target's
   BIOS/NIC, and the waker broadcasts magic packets to the targets' MACs (reported in their
   heartbeats). Machines with no reported MAC yet are skipped.
+- **Screenshot** (Machines table, Power column) — requests a screen capture on that machine's
+  next sync. Written to `commands.json` with a nonce, same one-shot pattern as shutdown/restart.
+  The service itself runs in Windows session 0 (no desktop), so it only schedules the actual
+  capture into the **logged-on user's interactive session** — it does nothing if no one is
+  signed in there. Once uploaded (to `screenshots/<machineId>/` on the `fleet-state` branch,
+  alongside the heartbeats), a **View** link appears next to the button to open the latest one.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.

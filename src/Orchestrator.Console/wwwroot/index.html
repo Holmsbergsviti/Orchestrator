@@ -100,6 +100,7 @@
     <span class="spacer"></span>
     <button id="reload">Reload</button>
     <button id="save" class="primary" disabled>Save &amp; push</button>
+    <form method="post" action="/logout" style="margin:0"><button type="submit" title="Sign out">Sign out</button></form>
   </header>
 
   <main>
@@ -297,11 +298,21 @@
           el('button', { type: 'button', textContent: 'Shut down', title: 'Power off this machine on its next sync',
             onclick: () => sendCommand(m, 'shutdown') }),
           el('button', { type: 'button', textContent: 'Restart', style: 'margin-left:6px', title: 'Reboot this machine on its next sync',
-            onclick: () => sendCommand(m, 'restart') })
+            onclick: () => sendCommand(m, 'restart') }),
+          el('button', { type: 'button', textContent: 'Screenshot', style: 'margin-left:6px',
+            title: 'Capture the screen on its next sync (needs a logged-on user)', onclick: () => requestScreenshot(m) }),
+          el('button', { type: 'button', textContent: 'Remote', style: 'margin-left:6px',
+            title: 'Start a live remote-control session (needs a logged-on user)', onclick: () => startRemoteSession(m) })
         ]);
         if (m.mac) {
           power.append(el('button', { type: 'button', textContent: 'Wake', style: 'margin-left:6px',
             title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => sendWake([m.machineId]) }));
+        }
+        if (m.lastScreenshotUtc) {
+          power.append(el('a', {
+            href: '/api/screenshot/' + encodeURIComponent(m.machineId), target: '_blank', rel: 'noopener',
+            textContent: 'View', style: 'margin-left:6px', title: 'Captured ' + relTime(m.lastScreenshotUtc)
+          }));
         }
         tb.append(el('tr', {}, [
           status,
@@ -566,6 +577,36 @@
         if (r.ok && res.ok) { toast(res.commit ? `Deleted · ${res.commit}` : (res.message || 'Deleted')); await load(); }
         else { toast('Delete failed: ' + (res.message || res.detail || 'unknown error'), true); }
       } catch (e) { toast('Delete failed: ' + e.message, true); }
+    }
+
+    // Request a screenshot capture from a machine (captured on its next sync).
+    async function requestScreenshot(m) {
+      try {
+        const r = await fetch('/api/screenshot', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) toast(res.commit ? `Screenshot requested · ${res.commit}` : (res.message || 'Screenshot requested'));
+        else toast('Screenshot failed: ' + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast('Screenshot failed: ' + e.message, true); }
+    }
+
+    // Start a live remote-control session: queues the request, then opens the viewer tab
+    // (it shows "waiting for the agent" until that machine's next sync picks the request up).
+    async function startRemoteSession(m) {
+      try {
+        const r = await fetch('/api/remote-session', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok && res.sessionId) {
+          toast(res.commit ? `Remote session requested · ${res.commit}` : (res.message || 'Remote session requested'));
+          const label = encodeURIComponent(m.label || m.hostname);
+          window.open(`/remote.html?sessionId=${encodeURIComponent(res.sessionId)}&machineId=${encodeURIComponent(m.machineId)}&label=${label}`, '_blank');
+        } else {
+          toast('Remote session failed: ' + (res.message || res.detail || 'unknown error'), true);
+        }
+      } catch (e) { toast('Remote session failed: ' + e.message, true); }
     }
 
     // Wake-on-LAN one or more machines (by id; the waker sends the packets).

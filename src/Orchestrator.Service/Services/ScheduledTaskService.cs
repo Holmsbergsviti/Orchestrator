@@ -27,6 +27,14 @@ public interface IScheduledTaskService   // the contract for scheduled-task hand
 
     /// <summary>Run a program ONCE, soon, in the interactive logged-on user's session (for "run now").</summary>
     void RunInteractiveOnce(ProgramEntry program);
+
+    /// <summary>Capture a screenshot ONCE, soon, in the interactive logged-on user's session
+    /// (the service itself runs in session 0, with no desktop to capture).</summary>
+    void RunInteractiveScreenshotOnce(string requestId);
+
+    /// <summary>Start a live remote-control session, soon, in the interactive logged-on user's
+    /// session, for up to <paramref name="maxDuration"/> before it's force-ended.</summary>
+    void RunInteractiveRemoteSessionOnce(string sessionId, TimeSpan maxDuration);
 }
 
 /// <summary>
@@ -110,6 +118,67 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             if (code != 0)
                 throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
             _log.LogInformation("run-now '{Name}': scheduled interactive run as {User} at {Time:HH:mm:ss}", program.Name, user, start);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+
+    public void RunInteractiveScreenshotOnce(string requestId)
+    {
+        var user = GetInteractiveUser();
+        if (string.IsNullOrWhiteSpace(user))
+        {
+            _log.LogWarning("screenshot '{Id}': no interactive user is logged on — cannot capture; skipping", requestId);
+            return;   // nothing to attach an interactive process to
+        }
+
+        var exe = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
+        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
+        var taskName = _config.RegistryEntryPrefix + "screenshot_" + requestId;
+        var xml = BuildInteractiveCaptureXml(exe, $"capture-screenshot {requestId}", user, start);
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"orch-shot-{Guid.NewGuid():N}.xml");
+        File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        try
+        {
+            var (code, output) = RunSchtasks("/Create", "/TN", taskName, "/XML", tmp, "/F");
+            if (code != 0)
+                throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
+            _log.LogInformation("screenshot '{Id}': scheduled interactive capture as {User} at {Time:HH:mm:ss}", requestId, user, start);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+
+    public void RunInteractiveRemoteSessionOnce(string sessionId, TimeSpan maxDuration)
+    {
+        var user = GetInteractiveUser();
+        if (string.IsNullOrWhiteSpace(user))
+        {
+            _log.LogWarning("remote-session '{Id}': no interactive user is logged on — cannot start; skipping", sessionId);
+            return;   // nothing to attach an interactive process to
+        }
+
+        var exe = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
+        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
+        var taskName = _config.RegistryEntryPrefix + "session_" + sessionId;
+        var xml = BuildInteractiveSessionXml(exe, $"remote-session {sessionId}", user, start, maxDuration);
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"orch-session-{Guid.NewGuid():N}.xml");
+        File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        try
+        {
+            var (code, output) = RunSchtasks("/Create", "/TN", taskName, "/XML", tmp, "/F");
+            if (code != 0)
+                throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
+            _log.LogInformation("remote-session '{Id}': scheduled interactive session as {User} at {Time:HH:mm:ss} (max {Max}min)",
+                sessionId, user, start, (int)maxDuration.TotalMinutes);
         }
         finally
         {
@@ -219,14 +288,48 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     /// given user's interactive session (InteractiveToken = no password), then deletes itself. Pure/testable.
     /// </summary>
     public static string BuildInteractiveRunOnceXml(ProgramEntry program, string execCommand, string execArguments, string userId, DateTime start)
+        => BuildInteractiveOnceXmlCore(
+            $"Orchestrator one-time interactive run of {program.Name}",
+            execCommand, execArguments, program.InstallPath, userId, start,
+            endWindow: TimeSpan.FromMinutes(10), execLimit: TimeSpan.FromHours(1));
+
+    /// <summary>
+    /// Build a Task Scheduler 1.2 XML doc that runs a screenshot capture ONCE at <paramref name="start"/>
+    /// in the given user's interactive session, then deletes itself. Pure/testable. No working directory —
+    /// the capture verb doesn't need one (it isn't launching a program from an install folder).
+    /// </summary>
+    public static string BuildInteractiveCaptureXml(string execCommand, string execArguments, string userId, DateTime start)
+        => BuildInteractiveOnceXmlCore(
+            "Orchestrator one-time interactive screenshot capture",
+            execCommand, execArguments, workingDir: null, userId, start,
+            endWindow: TimeSpan.FromMinutes(10), execLimit: TimeSpan.FromHours(1));
+
+    /// <summary>
+    /// Build a Task Scheduler 1.2 XML doc that runs a live remote-control session starting at
+    /// <paramref name="start"/> in the given user's interactive session, for up to
+    /// <paramref name="maxDuration"/> (plus a small buffer) before Task Scheduler force-ends it as
+    /// a backstop — the session process itself is expected to stop on its own well before that,
+    /// via its own timeout/cancellation. Pure/testable.
+    /// </summary>
+    public static string BuildInteractiveSessionXml(string execCommand, string execArguments, string userId, DateTime start, TimeSpan maxDuration)
     {
-        var description = Esc($"Orchestrator one-time interactive run of {program.Name}");
+        var window = maxDuration + TimeSpan.FromMinutes(15);   // buffer so Task Scheduler never cuts off a healthy session early
+        return BuildInteractiveOnceXmlCore(
+            "Orchestrator remote-control session",
+            execCommand, execArguments, workingDir: null, userId, start,
+            endWindow: window, execLimit: window);
+    }
+
+    private static string BuildInteractiveOnceXmlCore(string descriptionText, string execCommand, string execArguments, string? workingDir, string userId, DateTime start, TimeSpan endWindow, TimeSpan execLimit)
+    {
+        var description = Esc(descriptionText);
         var command = Esc(execCommand);
         var arguments = Esc(execArguments);
-        var workingDir = Esc(program.InstallPath);
+        var workingDirEsc = Esc(workingDir);
         var user = Esc(userId);
         var startB = start.ToString("yyyy-MM-ddTHH:mm:ss");           // local time, no zone
-        var endB = start.AddMinutes(10).ToString("yyyy-MM-ddTHH:mm:ss");
+        var endB = start.Add(endWindow).ToString("yyyy-MM-ddTHH:mm:ss");
+        var execLimitIso = $"PT{Math.Max(1, (int)execLimit.TotalMinutes)}M";   // ISO-8601 duration, e.g. "PT90M"
 
         var sb = new StringBuilder();
         sb.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-16\"?>");
@@ -258,15 +361,15 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         sb.AppendLine("    <Enabled>true</Enabled>");
         sb.AppendLine("    <Hidden>false</Hidden>");
         sb.AppendLine("    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>");   // self-clean after it expires
-        sb.AppendLine("    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>");
+        sb.AppendLine($"    <ExecutionTimeLimit>{execLimitIso}</ExecutionTimeLimit>");
         sb.AppendLine("  </Settings>");
         sb.AppendLine("  <Actions Context=\"Author\">");
         sb.AppendLine("    <Exec>");
         sb.AppendLine($"      <Command>{command}</Command>");
         if (!string.IsNullOrEmpty(arguments))
             sb.AppendLine($"      <Arguments>{arguments}</Arguments>");
-        if (!string.IsNullOrEmpty(workingDir))
-            sb.AppendLine($"      <WorkingDirectory>{workingDir}</WorkingDirectory>");
+        if (!string.IsNullOrEmpty(workingDirEsc))
+            sb.AppendLine($"      <WorkingDirectory>{workingDirEsc}</WorkingDirectory>");
         sb.AppendLine("    </Exec>");
         sb.AppendLine("  </Actions>");
         sb.Append("</Task>");

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<!--
+  FILE PURPOSE (in plain terms): The live remote-control viewer. Opened in its own tab from
+  the console's "Remote" button. Connects to /relay/view?sessionId=... over a WebSocket, draws
+  each incoming JPEG frame to a canvas, and (once Phase 3 lands) will forward mouse/keyboard
+  events back over the same socket. Phase 2 is view-only — there's no input capture wired up
+  here yet.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Orchestrator — Remote control</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111827; color: #e5e7eb; font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 10px 16px; background: #1f2937; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+    header .status { color: #9ca3af; font-size: 12px; }
+    header .spacer { flex: 1; }
+    button { font: inherit; border: 1px solid #374151; background: #111827; color: #e5e7eb;
+             padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    button:hover { border-color: #4b5563; }
+    main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #000; }
+    canvas { max-width: 100%; max-height: 100%; }
+    .msg { color: #9ca3af; font-size: 13px; padding: 0 20px; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">Remote control</h1>
+    <span class="status" id="status">Connecting…</span>
+    <span class="spacer"></span>
+    <button id="end">End session</button>
+  </header>
+  <main>
+    <div class="msg" id="waiting">Waiting for the agent to connect — this can take up to that machine's sync interval, and needs someone signed in there.</div>
+    <canvas id="canvas" hidden></canvas>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const sessionId = params.get('sessionId');
+    const label = params.get('label') || params.get('machineId') || '';
+    document.getElementById('title').textContent = 'Remote control — ' + label;
+
+    const statusEl = document.getElementById('status');
+    const waitingEl = document.getElementById('waiting');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    function showEnded(text) {
+      statusEl.textContent = text;
+      waitingEl.textContent = text;
+      waitingEl.hidden = false;
+      canvas.hidden = true;
+    }
+
+    if (!sessionId) {
+      showEnded('Missing sessionId in the URL.');
+    } else {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${location.host}/relay/view?sessionId=${encodeURIComponent(sessionId)}`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => { statusEl.textContent = 'Connected — waiting for the first frame…'; };
+      ws.onclose = () => showEnded('Session ended.');
+      ws.onerror = () => { statusEl.textContent = 'Connection error.'; };
+
+      ws.onmessage = async (ev) => {
+        if (!(ev.data instanceof ArrayBuffer)) return;   // ignore any stray text frames
+        const blob = new Blob([ev.data], { type: 'image/jpeg' });
+        const bitmap = await createImageBitmap(blob);
+        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+        }
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        if (canvas.hidden) { canvas.hidden = false; waitingEl.hidden = true; statusEl.textContent = 'Live'; }
+      };
+
+      document.getElementById('end').onclick = () => ws.close();
+    }
+  </script>
+</body>
+</html>

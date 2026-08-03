@@ -29,6 +29,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly IManifestService _manifests;       // loads state and builds the plan
     private readonly IChecksumService _checksums;       // verifies downloaded files
     private readonly IStartupManager _startup;          // handles startup registration
+    private readonly IScheduledTaskService _scheduledTasks;  // schedules interactive one-time runs (run-now, screenshot capture)
     private readonly IConfigService _configService;     // config + machine state
     private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
     private readonly ILogger<SyncService> _log;         // logger
@@ -39,6 +40,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         IManifestService manifests,
         IChecksumService checksums,
         IStartupManager startup,
+        IScheduledTaskService scheduledTasks,
         IConfigService configService,
         IFleetReporter fleetReporter,
         ILogger<SyncService> log)   // all dependencies handed in by DI
@@ -47,6 +49,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         _manifests = manifests;
         _checksums = checksums;
         _startup = startup;
+        _scheduledTasks = scheduledTasks;
         _configService = configService;
         _fleetReporter = fleetReporter;
         _config = configService.Config;     // grab the settings for convenience
@@ -306,6 +309,38 @@ public sealed class SyncService : ISyncService   // the actual implementation
             Trim(machine.CompletedCommands, 100);
             _configService.SaveMachineConfig(machine);
             ExecuteCommand(cmd);
+        }
+
+        // A pending screenshot capture request for this machine. The service itself has no
+        // desktop (session 0), so this only schedules the actual capture into the logged-on
+        // user's interactive session; that one-time run uploads the image itself.
+        if (OperatingSystem.IsWindows()
+            && file.Screenshots.TryGetValue(machine.MachineId, out var shot)
+            && !string.IsNullOrEmpty(shot.Id) && !machine.CompletedScreenshots.Contains(shot.Id))
+        {
+            // Record the id BEFORE scheduling so a retried cycle can't schedule it twice.
+            machine.CompletedScreenshots.Add(shot.Id);
+            Trim(machine.CompletedScreenshots, 100);
+            _configService.SaveMachineConfig(machine);
+            _scheduledTasks.RunInteractiveScreenshotOnce(shot.Id);
+        }
+
+        // A pending live remote-control session request for this machine. Same schedule-into-
+        // the-interactive-session pattern as screenshots, but the process it launches runs for
+        // the whole session instead of a single capture.
+        if (OperatingSystem.IsWindows()
+            && file.RemoteSessions.TryGetValue(machine.MachineId, out var session)
+            && !string.IsNullOrEmpty(session.Id) && !machine.CompletedRemoteSessions.Contains(session.Id))
+        {
+            machine.CompletedRemoteSessions.Add(session.Id);
+            Trim(machine.CompletedRemoteSessions, 100);
+            _configService.SaveMachineConfig(machine);
+
+            var expired = DateTimeOffset.TryParse(session.ExpiresUtc, out var expiresUtc) && expiresUtc < DateTimeOffset.UtcNow;
+            if (!expired)
+                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, TimeSpan.FromMinutes(Math.Max(1, _config.RemoteSessionMaxMinutes)));
+            else
+                _log.LogWarning("remote-session '{Id}' request expired before this sync; skipping", session.Id);
         }
 
         // Wake-on-LAN requests are sent by the designated always-on waker (targets are powered off).

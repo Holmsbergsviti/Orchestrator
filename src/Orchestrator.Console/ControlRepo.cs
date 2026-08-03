@@ -25,6 +25,12 @@ public sealed class ConsoleOptions
     public string MainBranch { get; set; } = "main";
     public string FleetStateBranch { get; set; } = "fleet-state";
     public bool OpenBrowser { get; set; } = true;
+    /// <summary>Shared secret required to sign in. REQUIRED if Urls binds to anything but
+    /// localhost — the console refuses to start non-locally without one.</summary>
+    public string AccessToken { get; set; } = "";
+    /// <summary>Path to a PFX certificate for HTTPS/WSS. REQUIRED if Urls binds non-locally.</summary>
+    public string CertPfxPath { get; set; } = "";
+    public string CertPfxPassword { get; set; } = "";
 }
 
 // ---- wire models (what the web page receives / sends) --------------------------------
@@ -65,6 +71,7 @@ public sealed class MachineView
     public string? LastError { get; set; }
     public List<string> AppliedProgramIds { get; set; } = new();
     public string? Mac { get; set; }   // primary NIC MAC, for Wake-on-LAN
+    public string? LastScreenshotUtc { get; set; }   // when the newest captured screenshot was taken, if any
 }
 
 public sealed class StateResponse
@@ -129,6 +136,31 @@ public sealed class WakeApiRequest
     [JsonPropertyName("machineIds")] public List<string> MachineIds { get; set; } = new();
 }
 
+/// <summary>Request to capture a screenshot on a machine.</summary>
+public sealed class ScreenshotApiRequest
+{
+    [JsonPropertyName("machineId")] public string MachineId { get; set; } = "";
+}
+
+/// <summary>Result of queueing a remote-control session — includes the session id the
+/// browser needs to open the matching /relay/view connection.</summary>
+public sealed class RemoteSessionResult
+{
+    public bool Ok { get; set; }
+    public string Message { get; set; } = "";
+    public string? Commit { get; set; }
+    public string? SessionId { get; set; }
+}
+
+/// <summary>The screenshot pointer file shape (screenshots/&lt;machineId&gt;/latest.json).</summary>
+internal sealed class ScreenshotMeta
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("path")] public string Path { get; set; } = "";
+    [JsonPropertyName("capturedUtc")] public string? CapturedUtc { get; set; }
+    [JsonPropertyName("sizeBytes")] public long SizeBytes { get; set; }
+}
+
 /// <summary>Request to add a new program to the manifest.</summary>
 public sealed class AddRequest
 {
@@ -180,12 +212,14 @@ public sealed class ControlRepo
 
     private readonly ConsoleOptions _opt;
     private readonly GitRepo _git;
+    private readonly RelayHub _relay;
     private readonly ILogger<ControlRepo> _log;
 
-    public ControlRepo(ConsoleOptions opt, ILogger<ControlRepo> log)
+    public ControlRepo(ConsoleOptions opt, RelayHub relay, ILogger<ControlRepo> log)
     {
         _opt = opt;
         _git = new GitRepo(opt.ControlRepoPath);
+        _relay = relay;
         _log = log;
     }
 
@@ -222,7 +256,7 @@ public sealed class ControlRepo
             resp.Warnings.Add($"No machines have reported yet (branch '{_opt.FleetStateBranch}' is empty or missing).");
 
         resp.Machines = heartbeats
-            .Select(hb => ToMachineView(hb, labels))
+            .Select(hb => ToMachineView(hb, labels, ReadLatestScreenshotMeta(hb.MachineId)))
             .OrderByDescending(m => m.Online)
             .ThenBy(m => m.Label ?? m.Hostname, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -536,6 +570,92 @@ public sealed class ControlRepo
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
     }
 
+    /// <summary>Request a screenshot capture from a machine via commands.json, then push. The
+    /// actual capture happens on the machine's next sync, in its logged-on user's session
+    /// (a Windows service has no desktop of its own) — so it needs someone signed in there.</summary>
+    public async Task<SaveResult> SendScreenshotAsync(string machineId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(machineId)) return Fail("Machine id is required.");
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return Fail(err);
+
+        const string cmdPath = "commands.json";
+        var full = Path.Combine(_opt.ControlRepoPath, cmdPath);
+        var root = File.Exists(full)
+            ? (JsonNode.Parse(File.ReadAllText(full), NodeOpts) as JsonObject ?? new JsonObject())
+            : new JsonObject();
+        if (root["screenshots"] is not JsonObject shots) { shots = new JsonObject(); root["screenshots"] = shots; }
+        shots[machineId] = new JsonObject
+        {
+            ["id"] = Guid.NewGuid().ToString("N"),   // fresh nonce = capture once on the target
+            ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+        };
+        File.WriteAllText(full, root.ToJsonString(JsonWrite));
+
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: screenshot {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
+            return new SaveResult { Ok = true, Message = "Screenshot requested — captured on the machine's next sync (needs a logged-on user).", Commit = sha };
+        }
+        catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
+    /// <summary>Fetch, then return a machine's latest captured screenshot as JPEG bytes, or null if none.</summary>
+    public async Task<byte[]?> GetLatestScreenshotAsync(string machineId, CancellationToken ct)
+    {
+        await _git.FetchAsync(_opt.Remote, ct);
+        var meta = ReadLatestScreenshotMeta(machineId);
+        if (meta is null || string.IsNullOrWhiteSpace(meta.Path)) return null;
+        return _git.ReadFileBytesFromRef(FleetRef, meta.Path);
+    }
+
+    /// <summary>Queue a live remote-control session on a machine via commands.json, then push,
+    /// and register the session's single-use token with the relay so the eventual agent/viewer
+    /// connections are recognized. The actual session starts on the machine's next sync, in its
+    /// logged-on user's session — same constraint as screenshots.</summary>
+    public async Task<RemoteSessionResult> StartRemoteSessionAsync(string machineId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(machineId)) return new RemoteSessionResult { Ok = false, Message = "Machine id is required." };
+        var err = await PrepareCleanMainAsync(ct);
+        if (err is not null) return new RemoteSessionResult { Ok = false, Message = err };
+
+        var sessionId = Guid.NewGuid().ToString("N");
+        var requestedUtc = DateTimeOffset.UtcNow;
+        var expiresUtc = requestedUtc.AddMinutes(10);   // window for the agent to pick this up and connect
+
+        const string cmdPath = "commands.json";
+        var full = Path.Combine(_opt.ControlRepoPath, cmdPath);
+        var root = File.Exists(full)
+            ? (JsonNode.Parse(File.ReadAllText(full), NodeOpts) as JsonObject ?? new JsonObject())
+            : new JsonObject();
+        if (root["remoteSessions"] is not JsonObject sessions) { sessions = new JsonObject(); root["remoteSessions"] = sessions; }
+        sessions[machineId] = new JsonObject
+        {
+            ["id"] = sessionId,
+            ["requestedUtc"] = requestedUtc.ToString("O"),
+            ["expiresUtc"] = expiresUtc.ToString("O")
+        };
+        File.WriteAllText(full, root.ToJsonString(JsonWrite));
+
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: remote-session {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
+            // Valid a bit past expiresUtc so a viewer that's already connected and waiting
+            // doesn't get dropped right as a slow agent finally connects.
+            _relay.RegisterPending(sessionId, machineId, validFor: TimeSpan.FromMinutes(15));
+            return new RemoteSessionResult
+            {
+                Ok = true,
+                SessionId = sessionId,
+                Message = "Session requested — connects on the machine's next sync (needs a logged-on user).",
+                Commit = sha
+            };
+        }
+        catch (GitException ex) { return new RemoteSessionResult { Ok = false, Message = $"Commit/push failed: {ex.Message}" }; }
+    }
+
     // ---- edit helpers ------------------------------------------------------------------
 
     /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.</summary>
@@ -709,7 +829,7 @@ public sealed class ControlRepo
         _ => null
     };
 
-    private static MachineView ToMachineView(HeartbeatFile hb, Dictionary<string, string> labels)
+    private static MachineView ToMachineView(HeartbeatFile hb, Dictionary<string, string> labels, ScreenshotMeta? shot)
     {
         labels.TryGetValue(hb.MachineId, out var label);
         return new MachineView
@@ -725,8 +845,18 @@ public sealed class ControlRepo
             ManifestVersion = hb.ManifestVersion,
             LastError = hb.LastError,
             AppliedProgramIds = hb.AppliedProgramIds,
-            Mac = hb.MacAddresses.FirstOrDefault()
+            Mac = hb.MacAddresses.FirstOrDefault(),
+            LastScreenshotUtc = shot?.CapturedUtc
         };
+    }
+
+    /// <summary>Read a machine's latest screenshot pointer from the fleet-state branch, if any.</summary>
+    private ScreenshotMeta? ReadLatestScreenshotMeta(string machineId)
+    {
+        var text = _git.ReadFileFromRef(FleetRef, $"screenshots/{machineId}/latest.json");
+        if (text is null) return null;
+        try { return JsonSerializer.Deserialize<ScreenshotMeta>(text, JsonRead); }
+        catch { return null; }   // malformed pointer -> treat as "no screenshot yet"
     }
 
     /// <summary>A machine is "online" if its last heartbeat is within ~2 sync intervals.</summary>
