@@ -93,6 +93,16 @@ public sealed class SelfUpdateService : ISelfUpdateService
         if (!release.ShouldUpdate(currentSha)) return;   // already on the published build
 
         var wanted = release.NormalizedSha256();
+
+        // A build that was installed, failed its health check and got rolled back is recorded on
+        // disk. Skip it permanently: after a rollback this machine is once again NOT on the
+        // published build, so without this it would reinstall the same broken build every sync.
+        if (LoadQuarantine().IsQuarantined(wanted))
+        {
+            _log.LogDebug("self-update: build {Wanted} was rolled back on this machine; not retrying it", Short(wanted));
+            return;
+        }
+
         if (_lastFailedSha == wanted && DateTimeOffset.UtcNow < _retryAfter)
             return;   // this exact build already failed recently; wait before hammering it again
 
@@ -137,21 +147,39 @@ public sealed class SelfUpdateService : ISelfUpdateService
         await File.WriteAllBytesAsync(stagedExe, bytes, ct);
         _log.LogInformation("self-update: staged verified build {Sha} ({Size:N0} bytes)", Short(wantedSha), bytes.Length);
 
-        // install.ps1 lives beside the install (put there by the installer) and preserves every
-        // existing setting, so the swap needs no arguments beyond where the new binary is.
-        var installer = Path.Combine(_config.RootPath, "install.ps1");
-        if (!File.Exists(installer))
+        // update-agent.ps1 (not install.ps1 directly) because the swap needs supervising: it
+        // backs up the current binary, installs, waits for the new one to complete a real sync,
+        // and restores the old one if it doesn't. Both scripts are placed by the installer.
+        var updater = Path.Combine(_config.RootPath, "update-agent.ps1");
+        if (!File.Exists(updater))
             throw new FileNotFoundException(
-                $"'{installer}' is missing, so the update can't be applied. Reinstall this machine once with " +
-                "bootstrap.ps1 to place it, after which self-update is self-sufficient.", installer);
+                $"'{updater}' is missing, so the update can't be applied safely. Reinstall this machine once with " +
+                "bootstrap.ps1 to place it, after which self-update is self-sufficient.", updater);
 
         _scheduledTasks.RunSystemOnce(
             taskName: _config.RegistryEntryPrefix + "selfupdate",
             command: "powershell.exe",
-            arguments: $"-ExecutionPolicy Bypass -NoProfile -File \"{installer}\" -SourceDir \"{updateDir}\"",
+            arguments: $"-ExecutionPolicy Bypass -NoProfile -File \"{updater}\" -SourceDir \"{updateDir}\" -Sha256 \"{wantedSha}\"",
             delay: TimeSpan.FromSeconds(20));   // let this sync cycle finish and the heartbeat go out
 
         _log.LogInformation("self-update: scheduled the swap to build {Sha}; this service will be restarted by it", Short(wantedSha));
+    }
+
+    /// <summary>Builds this machine has already rejected. Unreadable or absent means "none" —
+    /// a corrupt quarantine file must not be able to block legitimate updates forever.</summary>
+    private FailedUpdates LoadQuarantine()
+    {
+        var path = Path.Combine(_config.CachePath, "failed-updates.json");
+        try
+        {
+            if (!File.Exists(path)) return new FailedUpdates();
+            return System.Text.Json.JsonSerializer.Deserialize<FailedUpdates>(File.ReadAllText(path)) ?? new FailedUpdates();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "self-update: failed-updates.json is unreadable; treating it as empty");
+            return new FailedUpdates();
+        }
     }
 
     private static string Short(string? sha)

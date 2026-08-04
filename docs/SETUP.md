@@ -185,19 +185,25 @@ the tests, cross-builds the win-x64 exe, force-pushes it to `dist`, and records 
 Machines need **one** normal install first (§7) — self-update replaces the binary in place, so
 something has to put it there to begin with.
 
-### The brakes
+### If a build is bad
 
-`dotnet test` gates every publish, but a green test run is not proof a build is good, and there
-is no automatic rollback. Two ways to stop the fleet:
+Updates are supervised. Each machine keeps the binary it's replacing, installs the new one, and
+waits for it to complete a real sync cycle — not merely to start. If that doesn't happen within
+five minutes, it puts the old binary back, restarts the service, and records the rejected build
+in `cache\failed-updates.json` so it is never retried on that machine. A broken build therefore
+costs you one sync interval of downtime, not a visit to every machine.
+
+That covers a build that won't run. It does **not** cover a build that runs fine and does the
+wrong thing — for that you still need the brakes:
 
 - **`"enabled": false` in `agent.json`** — set it in the control repo and every machine stops
   updating on its next sync, without unpublishing anything.
 - **`-AutoUpdate $false`** at install time pins one machine to its current build. Useful to keep
   one known-good machine out of an update while you check a new build on another.
 
-To recover from a bad build that's already out: push a fix (the fleet takes the next build the
-same way), or set `enabled: false` and reinstall affected machines with §7's bootstrap command,
-which downloads whatever `dist` currently holds.
+To recover from a bad build that's already out: push a fix and the fleet takes it the same way
+it took the bad one. Machines that rolled back are already on their previous build and will
+accept the fix (only the rejected hash is quarantined, not updating in general).
 
 ## Public repos
 Omit `-Token`. The service calls the GitHub API anonymously (lower rate limit, 60/hr).

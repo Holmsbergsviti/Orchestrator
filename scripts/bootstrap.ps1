@@ -176,6 +176,10 @@ foreach ($p in 'RepoOwner', 'RepoName', 'Token', 'Branch', 'IntervalMinutes', 'I
 try {
     Set-Content -Path (Join-Path $InstallRoot "install.ps1") -Value $installText -Encoding UTF8
     Copy-Item -Path $defaultsFile -Destination (Join-Path $InstallRoot "defaults.json") -Force
+    # The supervised updater, which is what makes auto-update recoverable. Downloaded here
+    # because install.ps1 was piped in as text and has no folder of its own to copy it from.
+    $updaterText = (New-Object System.Net.WebClient).DownloadString("https://raw.githubusercontent.com/$CodeRepo/main/scripts/update-agent.ps1")
+    Set-Content -Path (Join-Path $InstallRoot "update-agent.ps1") -Value $updaterText -Encoding UTF8
 } catch {
     Write-Warning "Could not leave a local copy of install.ps1 ($($_.Exception.Message)); reconfiguring will need this bootstrap command again."
 }

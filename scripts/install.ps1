@@ -166,6 +166,16 @@ $installedDefaults = Join-Path $InstallRoot "defaults.json"
 if ($PSCommandPath -and $PSCommandPath -ne $installedScript) {
     Copy-Item -Path $PSCommandPath -Destination $installedScript -Force -ErrorAction SilentlyContinue
 }
+# update-agent.ps1 too: self-update runs it to supervise the swap and roll back a bad build.
+# Without it on disk the agent refuses to auto-update rather than updating unsupervised.
+if ($PSCommandPath) {
+    $updaterSource = Join-Path (Split-Path $PSCommandPath) "update-agent.ps1"
+    $updaterDest   = Join-Path $InstallRoot "update-agent.ps1"
+    # Skip when they're the same file — that's the case when self-update re-runs the local copy.
+    if ((Test-Path $updaterSource) -and ((Resolve-Path $updaterSource).Path -ne $updaterDest)) {
+        Copy-Item -Path $updaterSource -Destination $updaterDest -Force -ErrorAction SilentlyContinue
+    }
+}
 if ((Resolve-Path $defaultsFile).Path -ne $installedDefaults) {
     Copy-Item -Path $defaultsFile -Destination $installedDefaults -Force -ErrorAction SilentlyContinue
 }

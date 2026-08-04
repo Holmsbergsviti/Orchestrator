@@ -129,12 +129,19 @@ The agent logs its decision each sync; look for lines starting `self-update:`.
   (or vice versa); re-run it. Treat it as suspicious if the two repos should be in step.
 - **`install.ps1 is missing`** → that machine predates the local-installer copy. Re-run the
   bootstrap command once (SETUP §7) and self-update is self-sufficient from then on.
+- **`build ... was rolled back on this machine; not retrying it`** → that build was installed,
+  failed to complete a sync within the health window, and the previous binary was restored.
+  The machine is running fine on its old build. Check `cache\failed-updates.json` for the
+  reason, fix the build, and push again — only that one hash is quarantined, not updating
+  in general.
 - **It updated but the service didn't come back** → the swap is a scheduled task; check it ran:
   ```powershell
   Get-ScheduledTask -TaskName 'Orch_selfupdate' | Select TaskName, State, LastRunTime, LastTaskResult
   ```
-  `Start-Service GitHubOrchestrator` restarts it. The previous binary is gone by then, so
-  recovery from a bad build is the bootstrap command, not a rollback.
+  Rollback should have handled this automatically. If you see `ROLLBACK FAILED` in the log, the
+  new build failed *and* the restore failed — that machine genuinely needs hands. The previous
+  binary is still in `C:\Windows\Orch\backup\`; copy it over the installed one and
+  `Start-Service GitHubOrchestrator`.
 
 ## Force an immediate sync
 ```powershell

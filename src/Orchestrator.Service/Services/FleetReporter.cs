@@ -34,6 +34,24 @@ public sealed class FleetReporter : IFleetReporter
     private static readonly string AgentVersion =
         Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";   // the exe's version, once
 
+    /// <summary>SHA-256 of the running exe. Lazy and cached: it's a ~36 MB file and the answer
+    /// cannot change while this process lives — the binary is only ever swapped by an update,
+    /// which restarts the service.</summary>
+    private static readonly Lazy<string> AgentSha256 = new(() =>
+    {
+        try
+        {
+            var path = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return "";
+            using var stream = File.OpenRead(path);
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+        }
+        catch
+        {
+            return "";   // reporting an unknown build is better than failing the heartbeat
+        }
+    });
+
     private readonly IGitHubClient _github;
     private readonly IManifestService _manifests;
     private readonly IConfigService _configService;
@@ -71,6 +89,7 @@ public sealed class FleetReporter : IFleetReporter
                 Hostname = machine.Hostname,
                 Os = RuntimeInformation.OSDescription,
                 AgentVersion = AgentVersion,
+                AgentSha256 = AgentSha256.Value,
                 LastSeenUtc = DateTimeOffset.UtcNow.ToString("O"),
                 SyncIntervalMinutes = _config.SyncIntervalMinutes,
                 LastSyncSuccess = record.Success,

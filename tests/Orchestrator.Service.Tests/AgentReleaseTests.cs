@@ -116,3 +116,59 @@ public sealed class SystemTaskXmlTests
         Assert.NotNull(doc.DocumentElement);
     }
 }
+
+/// <summary>
+/// Checks for the quarantine list that makes a rollback stick. Without it, a rejected build
+/// gets reinstalled on the very next sync — the machine is back on the old binary, so the
+/// published hash still doesn't match — and the crash/rollback cycle repeats forever across
+/// the whole fleet.
+/// </summary>
+public sealed class FailedUpdatesTests
+{
+    private const string Bad = "b8e2e4e3e75bf0038afb6a4c7a69ad6ef8fddadabeda3db8629834fcbb59de65";
+    private const string Good = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    [Fact]
+    public void RecognisesABuildItAlreadyRejected()
+    {
+        var q = new FailedUpdates { Failed = { new FailedUpdate { Sha256 = Bad } } };
+        Assert.True(q.IsQuarantined(Bad));
+        Assert.False(q.IsQuarantined(Good));
+    }
+
+    [Fact]
+    public void MatchesRegardlessOfCasingOrFormatting()
+    {
+        // PowerShell writes this file and C# reads it. A casing difference silently
+        // reintroducing the crash loop would be a miserable bug to track down.
+        var q = new FailedUpdates { Failed = { new FailedUpdate { Sha256 = Bad.ToUpperInvariant() } } };
+        Assert.True(q.IsQuarantined(Bad));
+    }
+
+    [Fact]
+    public void EmptyOrMissingValuesQuarantineNothing()
+    {
+        var empty = new FailedUpdates();
+        Assert.False(empty.IsQuarantined(Bad));
+        Assert.False(empty.IsQuarantined(null));
+        Assert.False(empty.IsQuarantined(""));
+
+        // A junk entry must not accidentally match a real hash, or a corrupt file would
+        // block every future update on that machine.
+        var junk = new FailedUpdates { Failed = { new FailedUpdate { Sha256 = "" } } };
+        Assert.False(junk.IsQuarantined(Bad));
+    }
+
+    [Fact]
+    public void RoundTripsThroughTheJsonPowerShellWrites()
+    {
+        const string json = """
+        { "failed": [ { "sha256": "B8E2E4E3E75BF0038AFB6A4C7A69AD6EF8FDDADABEDA3DB8629834FCBB59DE65",
+                        "utc": "2026-08-04T13:00:00.000Z", "reason": "service is not running" } ] }
+        """;
+        var q = System.Text.Json.JsonSerializer.Deserialize<FailedUpdates>(json);
+        Assert.NotNull(q);
+        Assert.True(q!.IsQuarantined(Bad));
+        Assert.Equal("service is not running", q.Failed[0].Reason);
+    }
+}

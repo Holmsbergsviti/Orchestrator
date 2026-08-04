@@ -219,6 +219,27 @@
       setTimeout(() => (t.className = ''), 3200);
     }
 
+    // Which build a machine is actually running, and whether that's the published one.
+    // Compared against agent.json rather than against whatever build is newest among the
+    // machines — otherwise a fleet where EVERY machine is stale would look perfectly healthy.
+    function agentBuildCell(m) {
+      const running = (m.agentSha256 || '').toLowerCase();
+      const expected = (state.expectedAgentSha256 || '').toLowerCase();
+      const version = m.agentVersion || '—';
+
+      if (!running) return el('span', { textContent: version, title: 'This machine has not reported a build hash yet (older agent).' });
+      const short = running.slice(0, 8);
+      if (!expected) {
+        return el('span', { textContent: `${version} · ${short}`, title: 'No agent.json published, so there is nothing to compare against.' });
+      }
+      if (running === expected) {
+        return el('span', { textContent: `${version} · ${short}`, style: 'color:#15803d',
+          title: 'Running the published build.' });
+      }
+      return el('span', { textContent: `${version} · ${short} (update pending)`, style: 'color:#b45309',
+        title: `Running ${short}, but agent.json publishes ${expected.slice(0, 8)}. It should update on its next sync; if it stays like this, check that machine's log for "self-update:".` });
+    }
+
     function relTime(iso) {
       if (!iso) return '—';
       const d = new Date(iso); if (isNaN(d)) return iso;
@@ -319,7 +340,7 @@
           el('td', {}, labelInput),
           el('td', {}, el('code', { textContent: m.hostname })),
           el('td', { className: 'muted', textContent: m.os || '—' }),
-          el('td', { className: 'muted', textContent: m.agentVersion || '—' }),
+          el('td', { className: 'muted' }, [agentBuildCell(m)]),
           el('td', { title: m.lastSeenUtc || '', textContent: relTime(m.lastSeenUtc) }),
           el('td', { textContent: (m.appliedProgramIds || []).length + ' program(s)' }),
           el('td', {}, sync),

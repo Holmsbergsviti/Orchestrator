@@ -64,6 +64,9 @@ public sealed class MachineView
     public string? Label { get; set; }
     public string? Os { get; set; }
     public string? AgentVersion { get; set; }
+    /// <summary>SHA-256 of the exe this machine is running, so the UI can tell which machines
+    /// have picked up the published build and which are lagging or stuck.</summary>
+    public string? AgentSha256 { get; set; }
     public string? LastSeenUtc { get; set; }
     public bool Online { get; set; }
     public bool LastSyncSuccess { get; set; }
@@ -76,6 +79,11 @@ public sealed class MachineView
 
 public sealed class StateResponse
 {
+    /// <summary>SHA-256 of the agent build published in agent.json, or null when self-update
+    /// isn't set up. The page compares each machine against this rather than against "newest
+    /// seen", so a fleet where every machine is equally out of date still reads as out of date.</summary>
+    public string? ExpectedAgentSha256 { get; set; }
+
     public string GeneratedAt { get; set; } = DateTimeOffset.UtcNow.ToString("O");
     public List<ProgramView> Programs { get; set; } = new();
     public List<MachineView> Machines { get; set; } = new();
@@ -192,6 +200,7 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("hostname")] public string Hostname { get; set; } = "";
     [JsonPropertyName("os")] public string? Os { get; set; }
     [JsonPropertyName("agentVersion")] public string? AgentVersion { get; set; }
+    [JsonPropertyName("agentSha256")] public string? AgentSha256 { get; set; }
     [JsonPropertyName("lastSeenUtc")] public string? LastSeenUtc { get; set; }
     [JsonPropertyName("syncIntervalMinutes")] public int SyncIntervalMinutes { get; set; }
     [JsonPropertyName("lastSyncSuccess")] public bool LastSyncSuccess { get; set; }
@@ -258,6 +267,9 @@ public sealed class ControlRepo
 
         // --- friendly labels (from fleet.json on the main branch) ---
         var labels = LoadLabels(_git.ReadFileFromRef(MainRef, FleetLabelsPath));
+
+        // --- the agent build the fleet is supposed to be on (agent.json, written by CI) ---
+        resp.ExpectedAgentSha256 = ReadExpectedAgentSha();
 
         // --- heartbeats (from state/*.json on the fleet-state branch) ---
         var heartbeats = ReadHeartbeats();
@@ -869,6 +881,7 @@ public sealed class ControlRepo
             Label = label,
             Os = hb.Os,
             AgentVersion = hb.AgentVersion,
+            AgentSha256 = hb.AgentSha256,
             LastSeenUtc = hb.LastSeenUtc,
             Online = IsOnline(hb),
             LastSyncSuccess = hb.LastSyncSuccess,
@@ -878,6 +891,22 @@ public sealed class ControlRepo
             Mac = hb.MacAddresses.FirstOrDefault(),
             LastScreenshotUtc = shot?.CapturedUtc
         };
+    }
+
+    /// <summary>The SHA-256 CI published in agent.json, or null if self-update isn't set up.
+    /// Read leniently — a control repo without agent.json is a perfectly normal state, not an
+    /// error, and must not stop the rest of the page loading.</summary>
+    private string? ReadExpectedAgentSha()
+    {
+        var text = _git.ReadFileFromRef(MainRef, "agent.json");
+        if (text is null) return null;
+        try
+        {
+            var node = JsonNode.Parse(text, NodeOpts) as JsonObject;
+            var sha = node?["sha256"]?.GetValue<string>();
+            return string.IsNullOrWhiteSpace(sha) ? null : sha.Trim().ToLowerInvariant();
+        }
+        catch { return null; }
     }
 
     /// <summary>Read a machine's latest screenshot pointer from the fleet-state branch, if any.</summary>

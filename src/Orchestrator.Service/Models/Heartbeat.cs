@@ -27,6 +27,12 @@ public sealed class Heartbeat
     [JsonPropertyName("agentVersion")]
     public string AgentVersion { get; set; } = string.Empty;    // the orchestrator service's own version
 
+    /// <summary>SHA-256 of the exe this machine is actually running. The assembly version above
+    /// is the same for every CI build, so it can't answer "is this machine on the current
+    /// build?" — the hash can, and it's the same value the self-updater compares against.</summary>
+    [JsonPropertyName("agentSha256")]
+    public string AgentSha256 { get; set; } = string.Empty;
+
     [JsonPropertyName("lastSeenUtc")]
     public string LastSeenUtc { get; set; } = string.Empty;     // when this heartbeat was produced (ISO-8601 UTC)
 
@@ -56,7 +62,10 @@ public sealed class Heartbeat
     [JsonIgnore]
     public string Signature =>
         string.Join('|',
-            MachineId, Hostname, Os, AgentVersion,
+            // AgentSha256 is part of the fingerprint on purpose: a machine that has just
+            // updated itself must push a heartbeat promptly, or the console would keep showing
+            // it on the old build until something unrelated changed.
+            MachineId, Hostname, Os, AgentVersion, AgentSha256,
             SyncIntervalMinutes.ToString(),
             LastSyncSuccess.ToString(),
             ManifestVersion ?? "",

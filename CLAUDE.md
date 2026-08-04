@@ -127,6 +127,14 @@ that matter:
   running `install.ps1` (which preserves settings). The update check runs last in the cycle,
   after the heartbeat, because it can stop the service.
 - Brakes: `enabled:false` in `agent.json` (fleet-wide) and `AutoUpdate:false` (per machine).
+- The swap is supervised by `update-agent.ps1`, not `install.ps1` directly: it backs up the
+  current exe, installs, waits for a *new sync-history record* (proof the build works, not just
+  that it launched), and restores the backup otherwise. A rejected hash goes in
+  `cache/failed-updates.json`, which `SelfUpdateService` honours — without that, a rollback puts
+  the machine back on the old build, the published hash still mismatches, and it reinstalls the
+  broken build forever.
+- Heartbeats carry `agentSha256` (the running exe's hash) and the console compares it to
+  `agent.json`, so "which machines are on the current build" is answerable.
 
 **The exe is `WinExe`, not `Exe`.** Four of its five modes run with no user watching, and a
 console subsystem gave the screenshot/remote-session verbs a visible terminal window in the
