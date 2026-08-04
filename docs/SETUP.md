@@ -127,8 +127,12 @@ Start the console and it prints exactly what to use:
 ```text
 Remote control — settings for the agents (see docs/SETUP.md):
   Orchestrator:RelayUrl            = wss://<this-pc-ip-or-hostname>:5080
-  Orchestrator:RelayCertThumbprint = BB9818E4E3767461412AC207AA1BA77B7EED112F
+  Orchestrator:RelayCertThumbprint = THUMBPRINT-OF-YOUR-OWN-CERT-40-HEX-CHARS
 ```
+
+> Use **your** console's output. The thumbprint identifies one specific certificate — the
+> one you generated above — so a value copied from any example (including this page) will be
+> rejected by the agent, which is exactly what pinning is for.
 
 Pass both when installing each machine you want to control (substitute the real address for
 the placeholder — only you know whether agents reach this PC by LAN IP, hostname, or a public
@@ -136,7 +140,7 @@ name):
 
 ```powershell
 .\scripts\install.ps1 -RepoOwner <you> -RepoName control-repo -Token ghp_xxx `
-    -RelayUrl wss://192.168.1.20:5080 -RelayCertThumbprint BB9818E4E3767461412AC207AA1BA77B7EED112F
+    -RelayUrl wss://192.168.1.20:5080 -RelayCertThumbprint THUMBPRINT-OF-YOUR-OWN-CERT
 ```
 
 Drop `-RelayCertThumbprint` if the console uses a certificate from a real CA. `install.ps1`

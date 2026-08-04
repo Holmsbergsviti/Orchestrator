@@ -56,6 +56,21 @@ public sealed class RelayHub
     public void RegisterPending(string sessionId, string machineId, TimeSpan validFor)
         => _sessions[sessionId] = new RelaySession { MachineId = machineId, ExpiresUtc = DateTimeOffset.UtcNow.Add(validFor) };
 
+    /// <summary>The id of an already-live-or-pending session for this machine, or null. Used to stop
+    /// a second Remote click from stacking another session on a machine that already has one —
+    /// each session runs its own screen-capture loop and its own banner on that desktop.</summary>
+    public string? FindSessionForMachine(string machineId)
+    {
+        foreach (var (id, s) in _sessions)
+        {
+            if (s.ExpiresUtc < DateTimeOffset.UtcNow) { _sessions.TryRemove(id, out _); continue; }
+            // A session that has already ended is removed from _sessions by its own handler, so
+            // anything still here is either waiting for its two sides or actively bridging.
+            if (string.Equals(s.MachineId, machineId, StringComparison.OrdinalIgnoreCase)) return id;
+        }
+        return null;
+    }
+
     /// <summary>True if this session id is registered, unexpired, and (if given) matches the machine.</summary>
     public bool IsValid(string sessionId, string? machineId = null)
     {

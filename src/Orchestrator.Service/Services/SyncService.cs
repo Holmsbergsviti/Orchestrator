@@ -336,11 +336,19 @@ public sealed class SyncService : ISyncService   // the actual implementation
             Trim(machine.CompletedRemoteSessions, 100);
             _configService.SaveMachineConfig(machine);
 
-            var expired = DateTimeOffset.TryParse(session.ExpiresUtc, out var expiresUtc) && expiresUtc < DateTimeOffset.UtcNow;
+            var nowUtc = DateTimeOffset.UtcNow;
+            var expired = DateTimeOffset.TryParse(session.ExpiresUtc, out var expiresUtc) && expiresUtc < nowUtc;
             if (!expired)
                 _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, TimeSpan.FromMinutes(Math.Max(1, _config.RemoteSessionMaxMinutes)));
             else
-                _log.LogWarning("remote-session '{Id}' request expired before this sync; skipping", session.Id);
+                // Print BOTH clocks. The usual cause isn't a slow sync, it's this machine's clock
+                // disagreeing with the console's about what time it is in UTC — which is invisible
+                // unless the two numbers sit side by side.
+                _log.LogWarning(
+                    "remote-session '{Id}' request expired before this sync; skipping. Deadline was {Deadline:u}, " +
+                    "this machine thinks UTC is now {NowUtc:u} ({Behind} past the deadline). If that gap looks like " +
+                    "whole hours, this machine's clock or time zone is wrong, not the request.",
+                    session.Id, expiresUtc, nowUtc, nowUtc - expiresUtc);
         }
 
         // Wake-on-LAN requests are sent by the designated always-on waker (targets are powered off).

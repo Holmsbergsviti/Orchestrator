@@ -69,7 +69,14 @@ public static class ServiceRegistration
                    path: Path.Combine(logDir, "log-.txt"),
                    rollingInterval: RollingInterval.Day,
                    retainedFileCountLimit: 90,
-                   outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] {Message:lj}{NewLine}{Exception}");
+                   // shared:true matters more than it looks. Several of our processes log at
+                   // once — the service in session 0 plus whatever interactive verb it launched
+                   // (run-program, capture-screenshot, remote-session). Without this the service
+                   // holds an exclusive lock and the others silently divert to log-<date>_001.txt,
+                   // so the interactive side's errors land in a file nobody thinks to open.
+                   shared: true,
+                   outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] [{Level:u3}] [{ProcessId}] {Message:lj}{NewLine}{Exception}")
+               .Enrich.WithProperty("ProcessId", Environment.ProcessId);   // tells the interleaved processes apart
         });
     }
 }

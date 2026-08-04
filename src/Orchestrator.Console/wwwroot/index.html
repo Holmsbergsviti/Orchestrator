@@ -600,7 +600,9 @@
         });
         const res = await r.json().catch(() => ({ message: r.statusText }));
         if (r.ok && res.ok && res.sessionId) {
-          toast(res.commit ? `Remote session requested · ${res.commit}` : (res.message || 'Remote session requested'));
+          toast(res.alreadyRunning
+            ? (res.message || 'Session already open — reopening its viewer')
+            : (res.commit ? `Remote session requested · ${res.commit}` : (res.message || 'Remote session requested')));
           const label = encodeURIComponent(m.label || m.hostname);
           window.open(`/remote.html?sessionId=${encodeURIComponent(res.sessionId)}&machineId=${encodeURIComponent(m.machineId)}&label=${label}`, '_blank');
         } else {

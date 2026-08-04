@@ -150,6 +150,9 @@ public sealed class RemoteSessionResult
     public string Message { get; set; } = "";
     public string? Commit { get; set; }
     public string? SessionId { get; set; }
+    /// <summary>True when SessionId refers to a session that was ALREADY running for this machine
+    /// rather than one just queued — the UI reopens that viewer instead of starting a second one.</summary>
+    public bool AlreadyRunning { get; set; }
 }
 
 /// <summary>The screenshot pointer file shape (screenshots/&lt;machineId&gt;/latest.json).</summary>
@@ -623,6 +626,20 @@ public sealed class ControlRepo
     public async Task<RemoteSessionResult> StartRemoteSessionAsync(string machineId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(machineId)) return new RemoteSessionResult { Ok = false, Message = "Machine id is required." };
+
+        // Don't stack sessions. Queuing a second one gives that machine two banners and two
+        // capture loops streaming the same desktop — which is what happens if the first click
+        // feels slow and you click again. Hand back the existing session instead.
+        var existing = _relay.FindSessionForMachine(machineId);
+        if (existing is not null)
+            return new RemoteSessionResult
+            {
+                Ok = true,
+                AlreadyRunning = true,
+                SessionId = existing,
+                Message = "A session is already open for this machine — reopening its viewer."
+            };
+
         var err = await PrepareCleanMainAsync(ct);
         if (err is not null) return new RemoteSessionResult { Ok = false, Message = err };
 
