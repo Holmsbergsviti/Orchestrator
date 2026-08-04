@@ -37,15 +37,33 @@ jobs:
 
       - name: Install Pester
         shell: pwsh
-        run: |
-          Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser -MinimumVersion 5.5.0
-          Import-Module Pester -MinimumVersion 5.5.0
+        run: Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser -MinimumVersion 5.5.0
 
       - name: Run the script tests
         shell: pwsh
         run: |
+          # Import explicitly, in THIS step: each step is a fresh session, and Windows ships an
+          # ancient Pester 3.x that would be auto-loaded instead — it has no
+          # New-PesterConfiguration, so the run would fail for reasons unrelated to the tests.
+          Import-Module Pester -MinimumVersion 5.5.0 -Force
+          Write-Host "Pester $((Get-Module Pester).Version)"
+
           $config = New-PesterConfiguration
           $config.Run.Path = 'tests'
           $config.Output.Verbosity = 'Detailed'
-          $config.Run.Exit = $true
-          Invoke-Pester -Configuration $config
+          $config.Run.PassThru = $true
+          $result = Invoke-Pester -Configuration $config
+
+          # Put failures on the run's summary page. Downloading raw job logs needs repo-admin
+          # rights, so without this a failure is invisible to anyone who can only see the run.
+          $md = @("## Script tests", "", "Pester $((Get-Module Pester).Version) - " +
+                  "$($result.PassedCount) passed, $($result.FailedCount) failed, $($result.SkippedCount) skipped", "")
+          foreach ($t in $result.Tests | Where-Object Result -eq 'Failed') {
+              $md += "### ``$($t.ExpandedPath)``"
+              $md += '```'
+              $md += ($t.ErrorRecord | ForEach-Object { $_.ToString() })
+              $md += '```'
+          }
+          $md -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+          if ($result.FailedCount -gt 0) { exit 1 }

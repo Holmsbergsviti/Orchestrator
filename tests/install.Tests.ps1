@@ -22,8 +22,10 @@ BeforeAll {
     # Run the installer in dry-run mode against a throwaway install root and hand back the
     # settings it WOULD write.
     function Invoke-Settings {
-        param([hashtable]$Args = @{}, [string]$Root)
-        $all = @{ InstallRoot = $Root; DefaultsPath = $script:Defaults; ShowSettings = $true } + $Args
+        # NOT named $Args: that's an automatic PowerShell variable, and shadowing it inside a
+        # function is a reliable way to get confusing binding behaviour.
+        param([hashtable]$Extra = @{}, [string]$Root)
+        $all = @{ InstallRoot = $Root; DefaultsPath = $script:Defaults; ShowSettings = $true } + $Extra
         $json = & $script:Installer @all
         return ($json | Out-String | ConvertFrom-Json)
     }
@@ -61,7 +63,7 @@ Describe "install.ps1 settings merge" {
             try {
                 # The whole point: re-pinning a certificate must not cost you the token,
                 # the relay address, or the sync interval.
-                $s = Invoke-Settings -Root $root -Args @{ RelayCertThumbprint = "9999888877776666555544443333222211110000" }
+                $s = Invoke-Settings -Root $root -Extra @{ RelayCertThumbprint = "9999888877776666555544443333222211110000" }
 
                 $s.RelayCertThumbprint | Should -Be "9999888877776666555544443333222211110000"
                 $s.GitHubToken         | Should -Be "ghp_existing"
@@ -87,7 +89,7 @@ Describe "install.ps1 settings merge" {
             try {
                 # Turning remote control off must be possible. This is why the merge checks
                 # whether a parameter was passed rather than whether it is empty.
-                $s = Invoke-Settings -Root $root -Args @{ RelayUrl = "" }
+                $s = Invoke-Settings -Root $root -Extra @{ RelayUrl = "" }
                 $s.RelayUrl | Should -BeNullOrEmpty
                 $s.GitHubToken | Should -Be "ghp_existing"   # and nothing else is disturbed
             } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
@@ -96,7 +98,7 @@ Describe "install.ps1 settings merge" {
         It "lets you turn a boolean off and keeps it off" {
             $root = New-ExistingInstall $script:Installed
             try {
-                $s = Invoke-Settings -Root $root -Args @{ AutoUpdate = $false }
+                $s = Invoke-Settings -Root $root -Extra @{ AutoUpdate = $false }
                 $s.AutoUpdate | Should -BeFalse
             } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
         }
@@ -107,7 +109,7 @@ Describe "install.ps1 settings merge" {
             $pinned = $script:Installed.Clone(); $pinned.AutoUpdate = $false
             $root = New-ExistingInstall $pinned
             try {
-                $s = Invoke-Settings -Root $root -Args @{ IntervalMinutes = 15 }
+                $s = Invoke-Settings -Root $root -Extra @{ IntervalMinutes = 15 }
                 $s.AutoUpdate | Should -BeFalse
                 $s.SyncIntervalMinutes | Should -Be 15
             } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
@@ -124,7 +126,7 @@ Describe "install.ps1 settings merge" {
         It "falls back to defaults.json for anything not supplied" {
             $root = Join-Path ([IO.Path]::GetTempPath()) ("orch-test-" + [guid]::NewGuid().ToString("N"))
             $defaults = Get-Content $script:Defaults -Raw | ConvertFrom-Json
-            $s = Invoke-Settings -Root $root -Args @{ RepoOwner = "acme"; RepoName = "control" }
+            $s = Invoke-Settings -Root $root -Extra @{ RepoOwner = "acme"; RepoName = "control" }
 
             $s.Branch              | Should -Be $defaults.defaultBranch
             $s.SyncIntervalMinutes | Should -Be ([int]$defaults.defaultSyncIntervalMinutes)
@@ -142,7 +144,7 @@ Describe "install.ps1 settings merge" {
             try {
                 # A corrupt file must not make the machine un-installable — you'd have no way
                 # to fix it remotely.
-                $s = Invoke-Settings -Root $root -Args @{ RepoOwner = "acme"; RepoName = "control" }
+                $s = Invoke-Settings -Root $root -Extra @{ RepoOwner = "acme"; RepoName = "control" }
                 $s.RepoOwner | Should -Be "acme"
             } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
         }
