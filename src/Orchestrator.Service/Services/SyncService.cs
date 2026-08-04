@@ -30,6 +30,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly IChecksumService _checksums;       // verifies downloaded files
     private readonly IStartupManager _startup;          // handles startup registration
     private readonly IScheduledTaskService _scheduledTasks;  // schedules interactive one-time runs (run-now, screenshot capture)
+    private readonly ISelfUpdateService _selfUpdate;    // keeps the agent's own binary current
     private readonly IConfigService _configService;     // config + machine state
     private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
     private readonly ILogger<SyncService> _log;         // logger
@@ -41,6 +42,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         IChecksumService checksums,
         IStartupManager startup,
         IScheduledTaskService scheduledTasks,
+        ISelfUpdateService selfUpdate,
         IConfigService configService,
         IFleetReporter fleetReporter,
         ILogger<SyncService> log)   // all dependencies handed in by DI
@@ -50,6 +52,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         _checksums = checksums;
         _startup = startup;
         _scheduledTasks = scheduledTasks;
+        _selfUpdate = selfUpdate;
         _configService = configService;
         _fleetReporter = fleetReporter;
         _config = configService.Config;     // grab the settings for convenience
@@ -155,6 +158,14 @@ public sealed class SyncService : ISyncService   // the actual implementation
         }
 
         await _fleetReporter.ReportAsync(record, ct);   // tell GitHub our state (best-effort; never throws)
+
+        // Update the agent itself LAST: this can schedule a task that stops this very service,
+        // so everything above (programs applied, commands run, heartbeat sent) needs to have
+        // finished first. Never allowed to fail the cycle — a broken update must not stop a
+        // machine from syncing programs.
+        try { await _selfUpdate.CheckAndUpdateAsync(ct); }
+        catch (Exception ex) { _log.LogWarning(ex, "Self-update check failed"); }
+
         return Finish(record, sw);   // wrap up (timing, history, logs) and return the record
     }
 

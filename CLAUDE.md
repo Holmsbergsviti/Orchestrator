@@ -115,6 +115,24 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   because the session process (user session) and the service (session 0) would otherwise
   read-modify-write the same file and corrupt it.
 
+**The agent updates itself (`SelfUpdateService`).** `.github/workflows/publish-agent.yml` builds
+on every push to `main`, force-pushes the exe to the `dist` branch (orphan commit — a 36 MB
+binary per push would bloat the repo), and writes `agent.json` to the **control** repo. Points
+that matter:
+- The binary is public but its SHA-256 lives in the **private** control repo, so publishing code
+  to the fleet needs both repos. A build that doesn't match is refused, not retried.
+- Identity is the hash of the *running exe*, not a version string — a machine that was rolled
+  back or interrupted mid-update still converges.
+- A service can't overwrite its own binary, so the swap is a one-time **SYSTEM** scheduled task
+  running `install.ps1` (which preserves settings). The update check runs last in the cycle,
+  after the heartbeat, because it can stop the service.
+- Brakes: `enabled:false` in `agent.json` (fleet-wide) and `AutoUpdate:false` (per machine).
+
+**The exe is `WinExe`, not `Exe`.** Four of its five modes run with no user watching, and a
+console subsystem gave the screenshot/remote-session verbs a visible terminal window in the
+user's session that closing would kill. Verbs a human runs (`run`, `install`) call
+`AttachConsole(ATTACH_PARENT_PROCESS)` to print into the calling terminal.
+
 ## Console specifics
 
 - Manifest edits go through a **JSON DOM** (`System.Text.Json.Nodes`), not deserialize/reserialize, so

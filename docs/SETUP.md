@@ -159,6 +159,46 @@ interval and relay address exactly as they were. Only a *first* install needs th
 Then use **Remote** in the console (see [CONSOLE.md](CONSOLE.md)). A session starts on that
 machine's next sync, so lower `-IntervalMinutes` on machines you want to reach quickly.
 
+## 8. (Optional) Automatic agent updates
+
+With this set up, pushing to `main` rebuilds the agent and every machine installs it within one
+sync interval — no visiting machines, no reinstall commands.
+
+**How the trust works.** The binary is published to the **public** code repo's `dist` branch,
+but its SHA-256 is written to `agent.json` in your **private control repo**. An agent installs a
+download only if it hashes to that value. So getting code onto every machine as SYSTEM requires
+both repos, not just the public one. An agent that can't verify a build refuses it.
+
+### Set it up (once)
+
+The workflow needs to write to your control repo, which it can't do with its own token:
+
+1. Create a fine-grained PAT with **Contents: Read and write** on the control repo only.
+2. In the **code** repo → Settings → Secrets and variables → Actions:
+   - **Secret** `CONTROL_REPO_TOKEN` = that PAT.
+   - **Variable** `CONTROL_REPO` = `<you>/<control-repo>`, e.g. `acme/orchestrator-control`.
+
+That's it. Every push to `main` that touches `src/`, `defaults.json` or the solution now runs
+the tests, cross-builds the win-x64 exe, force-pushes it to `dist`, and records it in
+`agent.json`. Agents pick it up on their next sync and restart themselves into the new build.
+
+Machines need **one** normal install first (§7) — self-update replaces the binary in place, so
+something has to put it there to begin with.
+
+### The brakes
+
+`dotnet test` gates every publish, but a green test run is not proof a build is good, and there
+is no automatic rollback. Two ways to stop the fleet:
+
+- **`"enabled": false` in `agent.json`** — set it in the control repo and every machine stops
+  updating on its next sync, without unpublishing anything.
+- **`-AutoUpdate $false`** at install time pins one machine to its current build. Useful to keep
+  one known-good machine out of an update while you check a new build on another.
+
+To recover from a bad build that's already out: push a fix (the fleet takes the next build the
+same way), or set `enabled: false` and reinstall affected machines with §7's bootstrap command,
+which downloads whatever `dist` currently holds.
+
 ## Public repos
 Omit `-Token`. The service calls the GitHub API anonymously (lower rate limit, 60/hr).
 Heartbeats need a writable token, so with a public/anonymous setup set `ReportState: false`.

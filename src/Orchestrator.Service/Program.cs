@@ -8,11 +8,24 @@
 //   that actually does the syncing.
 // =====================================================================================
 
+using System.Runtime.InteropServices;                 // AttachConsole P/Invoke
 using Microsoft.Extensions.DependencyInjection;       // for resolving services (GetRequiredService)
 using Microsoft.Extensions.Hosting.WindowsServices;   // helpers to detect if we're running as a Windows service
 using Orchestrator.Service;                            // our own namespaces below
 using Orchestrator.Service.Services;
 using Serilog;                                         // the logging library
+
+// This is a WinExe, so it never gets a console of its own — which is the point: the screenshot
+// and remote-session verbs run in the user's session, and a console Exe gave them a visible
+// terminal window that closing would kill the session. The cost is that verbs a human DOES run
+// from a terminal would print nowhere, so those re-attach to the caller's console explicitly.
+// Silently does nothing when there's no parent console (the service, a scheduled task).
+const int ATTACH_PARENT_PROCESS = -1;   // must precede its use: top-level statements run in order
+if (OperatingSystem.IsWindows() && args.Length > 0 &&
+    args[0].ToLowerInvariant() is "run" or "install" or "uninstall" or "help" or "-h" or "--help" or "/?")
+{
+    AttachConsole(ATTACH_PARENT_PROCESS);
+}
 
 // CLI verbs (self-installer). Handled before the host so the single exe can set
 // itself up as a service. On non-Windows these are skipped and the host runs.
@@ -181,3 +194,10 @@ static int RunRemoteSession(string[] args)
         Log.CloseAndFlush();
     }
 }
+
+// Attach to the console of whoever launched us, if there is one. A WinExe has no console, so
+// without this the verbs people run by hand ("run", "install") would print into the void.
+// Returns false when there's no parent console to attach to, which is the normal case for the
+// service and for scheduled tasks — and is exactly why no window ever appears for them.
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool AttachConsole(int dwProcessId);

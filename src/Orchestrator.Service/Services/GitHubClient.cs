@@ -26,6 +26,10 @@ public interface IGitHubClient   // the contract for GitHub access
     /// <summary>Download the raw bytes for a program file.</summary>
     Task<byte[]> DownloadFileAsync(ProgramEntry program, CancellationToken ct = default);
 
+    /// <summary>Fetch agent.json (which agent build the fleet should run). Null if absent —
+    /// a control repo without one simply means self-update isn't in use.</summary>
+    Task<AgentRelease?> GetAgentReleaseAsync(CancellationToken ct = default);
+
     /// <summary>Get the blob SHA of a file on a branch, or null if it doesn't exist (404).</summary>
     Task<string?> GetFileShaAsync(string repoPath, string branch, CancellationToken ct = default);
 
@@ -96,6 +100,24 @@ public sealed class GitHubClient : IGitHubClient
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Could not fetch commands.json");   // non-fatal
+            return null;
+        }
+    }
+
+    public async Task<AgentRelease?> GetAgentReleaseAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var bytes = await GetContentsRawAsync("agent.json", ct);   // optional file in the control repo
+            return JsonSerializer.Deserialize<AgentRelease>(bytes, JsonOpts);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;   // no agent.json -> self-update simply isn't set up (normal)
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not fetch agent.json");   // non-fatal: keep running the current build
             return null;
         }
     }

@@ -116,6 +116,26 @@ forwards Ctrl+W, F5 and friends to the remote machine instead of acting on itsel
 countdown runs out. After 4 grants renewal is refused by design; start a new session.
 `logs\remote-sessions.json` on that machine records `"outcome": "timeout"` for these.
 
+## The fleet isn't picking up a new agent build
+The agent logs its decision each sync; look for lines starting `self-update:`.
+
+- **Nothing logged at all** → `AutoUpdate` is false in that machine's `appsettings.json`, or
+  there's no `agent.json` in the control repo (the workflow never wrote one — check the
+  Actions run, and that `CONTROL_REPO_TOKEN` / `CONTROL_REPO` are set).
+- **`agent.json is present but not usable`** → `enabled` is false (the deliberate brake), or the
+  entry has no valid 64-character `sha256`. An unverifiable release is refused on purpose.
+- **`Downloaded agent does not match the checksum`** → what `dist` serves isn't what `agent.json`
+  vouches for. Usually the workflow published the binary but failed before writing `agent.json`
+  (or vice versa); re-run it. Treat it as suspicious if the two repos should be in step.
+- **`install.ps1 is missing`** → that machine predates the local-installer copy. Re-run the
+  bootstrap command once (SETUP §7) and self-update is self-sufficient from then on.
+- **It updated but the service didn't come back** → the swap is a scheduled task; check it ran:
+  ```powershell
+  Get-ScheduledTask -TaskName 'Orch_selfupdate' | Select TaskName, State, LastRunTime, LastTaskResult
+  ```
+  `Start-Service GitHubOrchestrator` restarts it. The previous binary is gone by then, so
+  recovery from a bad build is the bootstrap command, not a rollback.
+
 ## Force an immediate sync
 ```powershell
 Restart-Service GitHubOrchestrator   # first cycle runs on start

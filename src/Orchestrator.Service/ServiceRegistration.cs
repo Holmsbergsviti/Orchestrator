@@ -52,6 +52,7 @@ public static class ServiceRegistration
         builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
         builder.Services.AddSingleton<IRemoteInputInjector, RemoteInputInjector>();
         builder.Services.AddSingleton<IRemoteSessionService, RemoteSessionService>();
+        builder.Services.AddSingleton<ISelfUpdateService, SelfUpdateService>();
     }
 
     /// <summary>Serilog: daily-rolling file under &lt;RootPath&gt;\logs plus console.</summary>

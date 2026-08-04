@@ -15,7 +15,13 @@
     <ImplicitUsings>enable</ImplicitUsings>             <!-- auto-import common namespaces so files need fewer usings -->
     <LangVersion>latest</LangVersion>                    <!-- allow the newest C# language features -->
     <RootNamespace>Orchestrator.Service</RootNamespace>  <!-- default namespace for the code -->
-    <OutputType>Exe</OutputType>                         <!-- produce an executable, not a library -->
+    <!-- WinExe, not Exe: this exe is launched four ways that must NOT show a console window —
+         as the service, as the startup launcher, for a screenshot capture, and for a live
+         remote-control session. A plain console Exe gives the last two a visible terminal in
+         the user's session, and closing that window kills the session. WinExe never allocates
+         one. The 'run' debug verb re-attaches to the calling terminal (see Program.cs) so
+         running it by hand still prints. -->
+    <OutputType>WinExe</OutputType>                      <!-- produce a windowed executable (no console) -->
 
     <!-- Derive the exe/assembly name from defaults.json's "exeName" so that file stays the
          SINGLE source of truth (no hand-editing AssemblyName). At build time we read the

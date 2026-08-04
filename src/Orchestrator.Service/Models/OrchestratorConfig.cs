@@ -60,6 +60,10 @@ public sealed class OrchestratorConfig
     /// <summary>If true, this (always-on) machine sends Wake-on-LAN magic packets for wake requests.</summary>
     public bool IsWaker { get; set; } = false;   // set true on one always-on machine per network segment
 
+    /// <summary>Keep the agent itself up to date from the build published in agent.json. Set false
+    /// on a machine you want pinned to its current build (or while bisecting a bad release).</summary>
+    public bool AutoUpdate { get; set; } = true;
+
     /// <summary>wss:// address of the console's relay (only needed if you use live remote-control
     /// sessions). Blank = the feature is unavailable on this machine.</summary>
     public string RelayUrl { get; set; } = string.Empty;

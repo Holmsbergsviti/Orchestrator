@@ -35,6 +35,10 @@ public interface IScheduledTaskService   // the contract for scheduled-task hand
     /// <summary>Start a live remote-control session, soon, in the interactive logged-on user's
     /// session, for up to <paramref name="maxDuration"/> before it's force-ended.</summary>
     void RunInteractiveRemoteSessionOnce(string sessionId, TimeSpan maxDuration);
+
+    /// <summary>Run a command ONCE as SYSTEM after <paramref name="delay"/>. Used for work that
+    /// can't happen inside the service — notably replacing the service's own binary.</summary>
+    void RunSystemOnce(string taskName, string command, string arguments, TimeSpan delay);
 }
 
 /// <summary>
@@ -186,6 +190,26 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         }
     }
 
+    public void RunSystemOnce(string taskName, string command, string arguments, TimeSpan delay)
+    {
+        var start = DateTime.Now.Add(delay);
+        var xml = BuildSystemRunOnceXml($"Orchestrator one-time SYSTEM task ({taskName})", command, arguments, start);
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"orch-sys-{Guid.NewGuid():N}.xml");
+        File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        try
+        {
+            var (code, output) = RunSchtasks("/Create", "/TN", taskName, "/XML", tmp, "/F");
+            if (code != 0)
+                throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
+            _log.LogInformation("Scheduled SYSTEM task '{Task}' for {Time:HH:mm:ss}", taskName, start);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+
     /// <summary>The user logged on to the interactive console session, e.g. "PC\\Alice"; null if none.</summary>
     private string? GetInteractiveUser()
     {
@@ -318,6 +342,63 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             "Orchestrator remote-control session",
             execCommand, execArguments, workingDir: null, userId, start,
             endWindow: window, execLimit: window);
+    }
+
+    /// <summary>
+    /// Build a Task Scheduler 1.2 XML doc that runs a command ONCE at <paramref name="start"/> as
+    /// SYSTEM, then deletes itself. Used for the agent's own update: swapping the service binary
+    /// means stopping the service, which a process running INSIDE that service cannot do to
+    /// itself — so the work has to happen out here, under an account that can manage services.
+    /// Pure/testable.
+    /// </summary>
+    public static string BuildSystemRunOnceXml(string descriptionText, string execCommand, string execArguments, DateTime start)
+    {
+        var description = Esc(descriptionText);
+        var command = Esc(execCommand);
+        var arguments = Esc(execArguments);
+        var startB = start.ToString("yyyy-MM-ddTHH:mm:ss");           // local time, no zone
+        var endB = start.AddMinutes(30).ToString("yyyy-MM-ddTHH:mm:ss");
+
+        var sb = new StringBuilder();
+        sb.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-16\"?>");
+        sb.AppendLine("<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">");
+        sb.AppendLine("  <RegistrationInfo>");
+        sb.AppendLine($"    <Description>{description}</Description>");
+        sb.AppendLine("    <Author>GitHubOrchestrator</Author>");
+        sb.AppendLine("  </RegistrationInfo>");
+        sb.AppendLine("  <Triggers>");
+        sb.AppendLine("    <TimeTrigger>");
+        sb.AppendLine($"      <StartBoundary>{startB}</StartBoundary>");
+        sb.AppendLine($"      <EndBoundary>{endB}</EndBoundary>");
+        sb.AppendLine("      <Enabled>true</Enabled>");
+        sb.AppendLine("    </TimeTrigger>");
+        sb.AppendLine("  </Triggers>");
+        sb.AppendLine("  <Principals>");
+        sb.AppendLine("    <Principal id=\"Author\">");
+        sb.AppendLine("      <UserId>S-1-5-18</UserId>");                 // LocalSystem, by SID so it's locale-independent
+        sb.AppendLine("      <RunLevel>HighestAvailable</RunLevel>");
+        sb.AppendLine("    </Principal>");
+        sb.AppendLine("  </Principals>");
+        sb.AppendLine("  <Settings>");
+        sb.AppendLine("    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");   // never two updates at once
+        sb.AppendLine("    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
+        sb.AppendLine("    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
+        sb.AppendLine("    <StartWhenAvailable>true</StartWhenAvailable>");
+        sb.AppendLine("    <AllowStartOnDemand>true</AllowStartOnDemand>");
+        sb.AppendLine("    <Enabled>true</Enabled>");
+        sb.AppendLine("    <Hidden>true</Hidden>");
+        sb.AppendLine("    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>");
+        sb.AppendLine("    <ExecutionTimeLimit>PT20M</ExecutionTimeLimit>");
+        sb.AppendLine("  </Settings>");
+        sb.AppendLine("  <Actions Context=\"Author\">");
+        sb.AppendLine("    <Exec>");
+        sb.AppendLine($"      <Command>{command}</Command>");
+        if (!string.IsNullOrEmpty(arguments))
+            sb.AppendLine($"      <Arguments>{arguments}</Arguments>");
+        sb.AppendLine("    </Exec>");
+        sb.AppendLine("  </Actions>");
+        sb.Append("</Task>");
+        return sb.ToString();
     }
 
     private static string BuildInteractiveOnceXmlCore(string descriptionText, string execCommand, string execArguments, string? workingDir, string userId, DateTime start, TimeSpan endWindow, TimeSpan execLimit)

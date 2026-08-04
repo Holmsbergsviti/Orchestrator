@@ -64,7 +64,8 @@ param(
     [string]$DefaultsPath = "",                                 # override path to defaults.json (used when piped in remotely)
     [switch]$IsWaker,                                           # mark this always-on machine as the Wake-on-LAN sender
     [string]$RelayUrl = "",                                     # console relay address for live remote control (blank = feature off here)
-    [string]$RelayCertThumbprint = ""                           # console's cert thumbprint; only needed if it's self-signed
+    [string]$RelayCertThumbprint = "",                          # console's cert thumbprint; only needed if it's self-signed
+    [bool]$AutoUpdate = $true                                   # keep the agent's own binary current from agent.json
 )
 
 $ErrorActionPreference = "Stop"                                 # abort on the first error
@@ -125,6 +126,7 @@ $IntervalMinutes     = if ($given.ContainsKey('IntervalMinutes'))     { $Interva
 $RelayUrl            = if ($given.ContainsKey('RelayUrl'))            { $RelayUrl }            elseif ($old -and $old.RelayUrl)            { $old.RelayUrl }            else { "" }
 $RelayCertThumbprint = if ($given.ContainsKey('RelayCertThumbprint')) { $RelayCertThumbprint } elseif ($old -and $old.RelayCertThumbprint) { $old.RelayCertThumbprint } else { "" }
 $IsWakerValue        = if ($given.ContainsKey('IsWaker'))             { [bool]$IsWaker }       elseif ($old)                               { [bool]$old.IsWaker }       else { $false }
+$AutoUpdateValue     = if ($given.ContainsKey('AutoUpdate'))          { [bool]$AutoUpdate }    elseif ($old -and $null -ne $old.AutoUpdate) { [bool]$old.AutoUpdate }   else { $true }
 
 if (-not $RepoOwner -or -not $RepoName) {
     throw "No existing install found at '$InstallRoot', so -RepoOwner and -RepoName are required for a first install."
@@ -184,6 +186,7 @@ $config = [ordered]@{
         StartupRegistryKey  = $D.registryRunKey   # registry path for startup entries (from defaults.json)
         RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)
         IsWaker             = $IsWakerValue        # true = this machine sends Wake-on-LAN packets for the fleet
+        AutoUpdate          = $AutoUpdateValue     # true = install the agent build published in the control repo's agent.json
         # Live remote control. This file is rewritten from scratch on every install, so anything
         # missing here is silently reset to its built-in default — which is exactly how a
         # hand-edited RelayUrl would disappear on the next upgrade. Pass it as a parameter instead.
