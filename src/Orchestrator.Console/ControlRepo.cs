@@ -206,6 +206,12 @@ public sealed class ControlRepo
     private const string FleetLabelsPath = "fleet.json";
     private const string StateDir = "state";
 
+    /// <summary>How long a queued remote-control session stays valid for the agent to notice it.</summary>
+    private static readonly TimeSpan PickupWindow = TimeSpan.FromMinutes(10);
+    /// <summary>Extra time the relay waits beyond that, for an agent that HAS picked the request
+    /// up to finish connecting.</summary>
+    private static readonly TimeSpan ConnectGrace = TimeSpan.FromMinutes(2);
+
     private static readonly JsonSerializerOptions JsonRead = new() { PropertyNameCaseInsensitive = true };
     private static readonly JsonNodeOptions NodeOpts = new() { PropertyNameCaseInsensitive = true };
     private static readonly JsonSerializerOptions JsonWrite = new() { WriteIndented = true };
@@ -622,7 +628,11 @@ public sealed class ControlRepo
 
         var sessionId = Guid.NewGuid().ToString("N");
         var requestedUtc = DateTimeOffset.UtcNow;
-        var expiresUtc = requestedUtc.AddMinutes(10);   // window for the agent to pick this up and connect
+        // How long the agent may take to NOTICE the request (it only looks once per sync). Past
+        // this it discards the request rather than ambushing whoever is at that machine with a
+        // session they asked for half an hour ago. A machine whose SyncIntervalMinutes is close
+        // to this will miss requests — see docs/TROUBLESHOOTING.md.
+        var expiresUtc = requestedUtc.Add(PickupWindow);
 
         const string cmdPath = "commands.json";
         var full = Path.Combine(_opt.ControlRepoPath, cmdPath);
@@ -642,9 +652,12 @@ public sealed class ControlRepo
         {
             var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
                 $"console: remote-session {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
-            // Valid a bit past expiresUtc so a viewer that's already connected and waiting
-            // doesn't get dropped right as a slow agent finally connects.
-            _relay.RegisterPending(sessionId, machineId, validFor: TimeSpan.FromMinutes(15));
+            // Derive this from expiresUtc rather than hardcoding it: the viewer shows this
+            // deadline as a countdown, so a window longer than the agent's own pickup window
+            // would leave it counting down long after the agent discarded the request as stale.
+            // The grace covers the agent connecting AFTER it picks the request up (its one-time
+            // task fires ~15s later, then has to reach the relay).
+            _relay.RegisterPending(sessionId, machineId, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace);
             return new RemoteSessionResult
             {
                 Ok = true,

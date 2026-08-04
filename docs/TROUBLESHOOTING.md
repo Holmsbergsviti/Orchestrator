@@ -67,6 +67,13 @@ target machine also shows a banner with the reason, and logs it to `logs\log-*.t
 - Nobody signed in on that machine? Then it can't run: the capture needs a desktop session,
   and the log says `no interactive user is logged on`.
 
+**Agent log says `remote-session '...' request expired before this sync; skipping`** — the
+request sat unclaimed for more than 10 minutes, so the agent discarded it rather than starting
+a session long after you asked for one. Just press **Remote** again.
+- If it happens *every* time, that machine's `SyncIntervalMinutes` is too close to (or past)
+  the 10-minute window, so it can never notice a request in time. Reinstall it with a smaller
+  `-IntervalMinutes`; a few minutes is a good value for machines you want to reach.
+
 **No banner ever appears on the target** — the session process quit immediately.
 - Almost always `Orchestrator:RelayUrl` is empty there. Check it:
   ```powershell
