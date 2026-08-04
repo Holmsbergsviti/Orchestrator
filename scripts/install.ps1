@@ -65,7 +65,11 @@ param(
     [switch]$IsWaker,                                           # mark this always-on machine as the Wake-on-LAN sender
     [string]$RelayUrl = "",                                     # console relay address for live remote control (blank = feature off here)
     [string]$RelayCertThumbprint = "",                          # console's cert thumbprint; only needed if it's self-signed
-    [bool]$AutoUpdate = $true                                   # keep the agent's own binary current from agent.json
+    [bool]$AutoUpdate = $true,                                  # keep the agent's own binary current from agent.json
+    # Resolve the settings, print them as JSON, and stop -- touching nothing. Exists so the
+    # merge logic (which is subtle, and the source of a real outage once) can be tested in CI
+    # against the REAL code path, rather than a copy of it that could drift.
+    [switch]$ShowSettings
 )
 
 $ErrorActionPreference = "Stop"                                 # abort on the first error
@@ -95,9 +99,11 @@ if (-not $InstallRoot)     { $InstallRoot = $D.installRoot }    # fill install f
 # Before touching appsettings.json: the install folder is readable only by SYSTEM and
 # Administrators, so a non-elevated run would fail to read it and look like a fresh machine
 # rather than reporting the real problem.
-$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())  # who is running this
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {                          # not an admin?
-    throw "Must run as Administrator."                                                                            # then stop
+if (-not $ShowSettings) {   # a dry run changes nothing, so it needs no privileges
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())  # who is running this
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {                          # not an admin?
+        throw "Must run as Administrator."                                                                            # then stop
+    }
 }
 
 # --- Merge with the settings already on this machine ------------------------------
@@ -130,6 +136,23 @@ $AutoUpdateValue     = if ($given.ContainsKey('AutoUpdate'))          { [bool]$A
 
 if (-not $RepoOwner -or -not $RepoName) {
     throw "No existing install found at '$InstallRoot', so -RepoOwner and -RepoName are required for a first install."
+}
+
+if ($ShowSettings) {
+    # Same shape as the file that would be written, so a test can assert on exactly what an
+    # install would persist. Stops here: nothing copied, no service touched.
+    [ordered]@{
+        RepoOwner           = $RepoOwner
+        RepoName            = $RepoName
+        Branch              = $Branch
+        GitHubToken         = $Token
+        SyncIntervalMinutes = $IntervalMinutes
+        IsWaker             = $IsWakerValue
+        AutoUpdate          = $AutoUpdateValue
+        RelayUrl            = $RelayUrl
+        RelayCertThumbprint = $RelayCertThumbprint
+    } | ConvertTo-Json -Depth 5
+    exit 0
 }
 
 # Are there binaries to install? If not, and this machine already has them, treat the run as a

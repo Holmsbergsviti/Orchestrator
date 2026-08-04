@@ -1,0 +1,113 @@
+# =====================================================================================
+# FILE PURPOSE (in plain terms):
+#   Notices when a machine stops checking in, and tells you.
+#
+#   Every agent commits a heartbeat to state/<machineId>.json on the fleet-state branch each
+#   sync. Nothing was watching those, so a machine could go silent — powered off, crashed,
+#   broken by a bad update — and you'd only find out when you happened to open the console.
+#   That's a poor property for a fleet you can no longer reach by hand.
+#
+#   This runs on a schedule, compares each heartbeat's age against that machine's own sync
+#   interval, and opens an issue when any machine is overdue. GitHub emails you about issues,
+#   so there's nothing to host: the watchdog lives in the same repo as the data it watches.
+#
+#   It opens ONE issue and leaves it alone while the problem persists (no half-hourly
+#   comment spam), then closes it automatically once every machine is reporting again.
+#
+#   This file belongs in your CONTROL repo, not the code repo — it reads heartbeats, and
+#   machine names shouldn't end up in a public issue tracker.
+# =====================================================================================
+
+name: Fleet watch
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every 30 minutes
+  workflow_dispatch:          # ...and on demand, for testing
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the heartbeats
+        uses: actions/checkout@v4
+        with:
+          ref: fleet-state
+          fetch-depth: 1
+
+      - name: Look for machines that have gone quiet
+        id: scan
+        run: |
+          python3 - <<'PY' > report.md
+          import json, glob, os, datetime
+
+          now = datetime.datetime.now(datetime.timezone.utc)
+          stale, healthy = [], []
+
+          for path in sorted(glob.glob("state/*.json")):
+              try:
+                  with open(path) as f:
+                      hb = json.load(f)
+              except Exception as e:
+                  stale.append((os.path.basename(path), f"unreadable heartbeat ({e})", None))
+                  continue
+
+              name = hb.get("hostname") or hb.get("machineId") or os.path.basename(path)
+              last = hb.get("lastSeenUtc")
+              try:
+                  seen = datetime.datetime.fromisoformat(last.replace("Z", "+00:00"))
+              except Exception:
+                  stale.append((name, "no readable lastSeenUtc", None))
+                  continue
+
+              age_min = (now - seen).total_seconds() / 60
+              # Judge each machine against ITS OWN interval: a box that syncs hourly isn't late
+              # at 40 minutes, and one that syncs every minute is very late indeed.
+              interval = max(1, int(hb.get("syncIntervalMinutes") or 60))
+              limit = max(3 * interval, 30)
+              (stale if age_min > limit else healthy).append((name, f"last seen {int(age_min)} min ago (expected within {int(limit)})", age_min))
+
+          print(f"{len(stale)} machine(s) overdue, {len(healthy)} reporting normally.\n")
+          if stale:
+              print("| Machine | Status |")
+              print("|---|---|")
+              for name, why, _ in sorted(stale):
+                  print(f"| `{name}` | {why} |")
+              print("\nCommon causes: the machine is switched off, the service stopped, or an "
+                    "update left it unable to start. Check its log at `C:\\Windows\\Orch\\logs\\`.")
+          PY
+
+          if grep -q "^0 machine(s) overdue" report.md; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+          cat report.md
+
+      - name: Open or close the alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Fleet watch: machines not reporting"
+        run: |
+          existing=$(gh issue list --state open --search "in:title $TITLE" --json number --jq '.[0].number // empty')
+
+          if [ "${{ steps.scan.outputs.stale }}" = "true" ]; then
+            if [ -n "$existing" ]; then
+              # Already alerted. Deliberately silent while it persists — a comment every 30
+              # minutes trains you to ignore the notifications you actually want.
+              echo "Issue #$existing is already open; leaving it alone."
+            else
+              gh issue create --title "$TITLE" --body-file report.md
+            fi
+          else
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "All machines are reporting again. Closing."
+              gh issue close "$existing"
+            else
+              echo "All machines healthy."
+            fi
+          fi

@@ -45,6 +45,22 @@ jobs:
         # between a push and every machine you own installing it.
         run: dotnet test --configuration Release
 
+      - name: Check the scripts parse
+        # The install/update scripts are load-bearing (self-update runs them to swap the
+        # binary) but they're PowerShell, so the C# tests say nothing about them. A syntax
+        # error here would only surface on a machine, mid-update. The behavioural tests run
+        # on Windows in the job below; this is the cheap check that catches typos early.
+        shell: pwsh
+        run: |
+          $bad = $false
+          foreach ($f in Get-ChildItem scripts/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $bad = $true; Write-Host "::error file=$($f.Name)::$($errors[0].Message)" }
+            else { Write-Host "ok: $($f.Name)" }
+          }
+          if ($bad) { exit 1 }
+
       - name: Publish the win-x64 agent
         run: |
           dotnet publish src/Orchestrator.Service/Orchestrator.Service.csproj \
