@@ -106,6 +106,14 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   desktop, never pixels — the capture is downscaled and may span monitors. Parsing is
   deliberately strict (it becomes real keystrokes), and every held key/button is released when
   a session ends, or it stays stuck down on that desktop.
+- Sessions run in renewable **grants** (`RemoteSessionMaxMinutes`, ceiling `MaxSessionGrants`).
+  The agent owns the deadline and broadcasts it; the viewer only displays it. Only the frame
+  loop writes to the agent's socket — the receive loop mutates state and flags it, because a
+  WebSocket allows one concurrent writer. `RunInteractiveRemoteSessionOnce` gets
+  `RemoteSessionAbsoluteMax` so Task Scheduler can't kill a legitimately renewed session.
+- Sessions are audited to `logs/remote-sessions.json` — its own file, not `sync-history.json`,
+  because the session process (user session) and the service (session 0) would otherwise
+  read-modify-write the same file and corrupt it.
 
 ## Console specifics
 

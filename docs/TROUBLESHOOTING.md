@@ -5,8 +5,10 @@
 -->
 # Troubleshooting
 
-Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day).
+Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day). The service and any interactive
+process it launches (run-now, screenshot, remote session) all write here, tagged by process id.
 Structured history: `C:\Windows\Orch\logs\sync-history.json`.
+Remote-control audit trail: `C:\Windows\Orch\logs\remote-sessions.json`.
 Last-applied manifest: `C:\Windows\Orch\cache\local-manifest.json`.
 
 ## Service won't start
@@ -108,6 +110,11 @@ locked, on the UAC secure desktop, or after an RDP disconnect. It resumes on its
 **My own browser shortcuts stopped working** — that's the point: while **Input: on**, this tab
 forwards Ctrl+W, F5 and friends to the remote machine instead of acting on itself. Press
 **Input: off** to get them back; the session keeps running.
+
+**The session ended while I was still using it** — sessions run in grants of
+`RemoteSessionMaxMinutes`. Click **Renew** (it appears in the last five minutes) before the
+countdown runs out. After 4 grants renewal is refused by design; start a new session.
+`logs\remote-sessions.json` on that machine records `"outcome": "timeout"` for these.
 
 ## Force an immediate sync
 ```powershell

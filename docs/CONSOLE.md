@@ -95,7 +95,16 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   - A red **"Remote control active — click to end"** banner appears on the target for the whole
     session. It can't be turned off, and clicking it ends the session immediately — that
     override always wins over the console.
-  - Sessions end at `RemoteSessionMaxMinutes` (default 30) whatever the console is doing.
+  - Sessions run in **grants** of `RemoteSessionMaxMinutes` (default 30). The viewer shows the
+    time left, and a **Renew** button appears in the last five minutes. Nothing ever extends
+    itself — renewing is always a click, and the machine's banner shows the new end time so the
+    person sitting there sees the window move. After 4 grants (2 hours by default) renewal is
+    refused, the button disappears, and the session ends on schedule regardless of the console.
+  - Every session is recorded on the target machine in `logs\remote-sessions.json`: session id,
+    machine, start/end, duration, how it ended, how many input events were injected, and how
+    many times it was renewed. Sessions that failed to connect are recorded too — "someone tried
+    to open a session here" is worth knowing. Kept separate from `sync-history.json` because a
+    different process writes it (see below).
   - Pending sessions live in the console's memory, so **restarting the console cancels them**;
     just press Remote again.
   - Pressing Remote again on a machine that already has a session reopens **that** viewer

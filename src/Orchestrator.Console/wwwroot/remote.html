@@ -43,6 +43,8 @@
     <h1 id="title">Remote control</h1>
     <span class="status" id="status">Connecting…</span>
     <span class="spacer"></span>
+    <span class="status" id="remaining"></span>
+    <button id="renew" hidden title="Extend this session by another grant. Nothing extends on its own, and the machine's banner shows the new end time.">Renew</button>
     <button id="inputToggle" title="When on, your mouse and keyboard drive the remote machine and normal browser shortcuts are suppressed">Input: on</button>
     <button id="end">End session</button>
   </header>
@@ -70,6 +72,10 @@
     let agentJoined = false; // did the target machine's agent connect?
     let countdown = null;    // interval id for the "waiting" timer
     let endReason = null;    // reason the relay told us, before the socket dropped
+    let deadlineMs = null;   // when the AGENT says this session ends (its clock is the real one)
+    let canRenew = false;    // false once the agent has hit its renewal ceiling
+    const remainingEl = document.getElementById('remaining');
+    const renewBtn = document.getElementById('renew');
 
     // The list below is the whole point of this page's error handling: every one of these is
     // a real way a session silently produces no picture, and none of them are visible from here.
@@ -108,6 +114,28 @@
       countdown = setInterval(render, 1000);
     }
 
+    // Show how much of the session is left, and offer Renew only while the agent still allows
+    // it. Renewal is always an explicit click — nothing here extends a session on its own.
+    function setDeadline(untilUtc, renewable) {
+      const parsed = Date.parse(untilUtc);
+      if (!Number.isFinite(parsed)) return;
+      deadlineMs = parsed;
+      canRenew = !!renewable;
+      renderRemaining();
+    }
+
+    function renderRemaining() {
+      if (deadlineMs === null) { remainingEl.textContent = ''; renewBtn.hidden = true; return; }
+      const left = Math.max(0, Math.round((deadlineMs - Date.now()) / 1000));
+      const mins = String(Math.floor(left / 60)).padStart(2, '0');
+      const secs = String(left % 60).padStart(2, '0');
+      remainingEl.textContent = `Ends in ${mins}:${secs}`;
+      // Surface Renew as the deadline approaches rather than the whole time, so it reads as a
+      // decision rather than furniture. Hidden entirely once the ceiling is reached.
+      renewBtn.hidden = !canRenew || left > 300;
+    }
+    setInterval(renderRemaining, 1000);
+
     if (!sessionId) {
       showMessage('<h2>Missing sessionId in the URL.</h2><p>Open this page with the console’s Remote button.</p>', 'No session');
     } else {
@@ -141,18 +169,26 @@
       ws.onerror = () => { if (opened) statusEl.textContent = 'Connection error'; };
 
       ws.onmessage = async (ev) => {
-        // Text = a status line from the relay; binary = an actual screen frame.
+        // Text = a control message (relay status, or the agent's deadline); binary = a frame.
         if (typeof ev.data === 'string') {
           let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-          if (msg.t !== 'status') return;
-          if (msg.state === 'waiting') showWaiting(msg.untilUtc);
-          if (msg.state === 'ended') endReason = msg.reason || 'the session ended';
-          if (msg.state === 'connected') {
-            agentJoined = true;
-            showMessage(
-              `<h2>${label || 'The machine'} connected.</h2><p>Waiting for the first frame…</p>`,
-              'Waiting for a frame');
+
+          if (msg.t === 'status') {
+            if (msg.state === 'waiting') showWaiting(msg.untilUtc);
+            if (msg.state === 'ended') endReason = msg.reason || 'the session ended';
+            if (msg.state === 'connected') {
+              agentJoined = true;
+              showMessage(
+                `<h2>${label || 'The machine'} connected.</h2><p>Waiting for the first frame…</p>`,
+                'Waiting for a frame');
+            }
+            return;
           }
+
+          // The agent is the only authority on when the session ends — it holds the timer that
+          // actually enforces it. What's shown here is a readout of ITS deadline, never a second
+          // clock of our own that could drift out of agreement with the one doing the enforcing.
+          if (msg.t === 'deadline') setDeadline(msg.untilUtc, msg.canRenew);
           return;
         }
         if (!(ev.data instanceof ArrayBuffer)) return;
@@ -242,6 +278,11 @@
         canvas.style.cursor = inputEnabled ? 'crosshair' : 'default';
       };
       canvas.style.cursor = 'crosshair';
+
+      // Deliberately NOT gated on the input toggle: renewing is a session decision, not input.
+      renewBtn.onclick = () => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'renew' }));
+      };
 
       document.getElementById('end').onclick = () => {
         // Tell the agent first so it tears down deliberately (releasing anything still held)

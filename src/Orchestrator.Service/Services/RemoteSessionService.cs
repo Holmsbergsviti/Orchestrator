@@ -22,6 +22,7 @@ using System.Net.Sockets;             // SocketException (used to explain "could
 using System.Net.WebSockets;          // ClientWebSocket
 using System.Runtime.Versioning;      // [SupportedOSPlatform]
 using System.Security.Authentication; // AuthenticationException (TLS/certificate failures)
+using System.Text.Json;               // writing the session audit record
 using Microsoft.Extensions.Logging;   // logging
 using Orchestrator.Service.Models;    // OrchestratorConfig / MachineConfig
 
@@ -41,14 +42,22 @@ public sealed class RemoteSessionService : IRemoteSessionService
     private static readonly TimeSpan ErrorDisplay = TimeSpan.FromSeconds(20);          // how long a failure stays on screen
     private const int ConnectAttempts = 3;   // the console may be restarting right as the task fires
 
+    private static readonly TimeSpan DeadlineBroadcast = TimeSpan.FromSeconds(5);       // how often the viewer is re-told the deadline
+
     private const string ConnectingText = "Remote control — connecting…";
-    private const string ActiveText = "Remote control active — click to end";
 
     private readonly IScreenCaptureService _capture;
     private readonly IRemoteInputInjector _input;
     private readonly IConfigService _configService;
     private readonly ILogger<RemoteSessionService> _log;
     private readonly OrchestratorConfig _config;
+
+    // Session state shared between the frame loop and the receive loop. Deadline is stored as
+    // ticks so it can be read and written atomically without a lock on the hot frame path.
+    private long _deadlineTicks;
+    private int _deadlineChanged;   // 0/1 flag: tells the frame loop to re-broadcast promptly
+    private int _grantsUsed;        // 1 after the initial grant; each renewal adds one
+    private long _injectedEvents;   // for the audit record: was this session actually driven?
 
     public RemoteSessionService(IScreenCaptureService capture, IRemoteInputInjector input, IConfigService configService, ILogger<RemoteSessionService> log)
     {
@@ -68,16 +77,19 @@ public sealed class RemoteSessionService : IRemoteSessionService
         }
 
         var machine = _configService.LoadOrCreateMachineConfig();
+        var startedUtc = DateTimeOffset.UtcNow;
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        sessionCts.CancelAfter(TimeSpan.FromMinutes(Math.Max(1, _config.RemoteSessionMaxMinutes)));
+        GrantTime(sessionCts);   // the first grant; the operator can renew a bounded number of times
 
         // The banner goes up FIRST, before anything can fail, so that "nothing happened at all"
         // is never one of the outcomes someone at this machine has to interpret.
-        using var banner = new SessionBanner(ConnectingText, SessionBanner.ColorPending, () => SafeCancel(sessionCts));
+        using var banner = new SessionBanner(ConnectingText, SessionBanner.ColorPending,
+            () => { SetEndReason("banner"); SafeCancel(sessionCts); });
         var uiThread = new Thread(banner.RunMessageLoop) { IsBackground = true };
         uiThread.SetApartmentState(ApartmentState.STA);   // conventional for a Win32 message-loop thread
         uiThread.Start();
 
+        var outcome = "failed";
         try
         {
             if (string.IsNullOrWhiteSpace(_config.RelayUrl))
@@ -89,11 +101,19 @@ public sealed class RemoteSessionService : IRemoteSessionService
                 return 1;
             }
 
-            _log.LogInformation("remote-session {Id}: started (max {Max}min)", sessionId, _config.RemoteSessionMaxMinutes);
-            return await RunSessionLoopAsync(machine, sessionId, banner, sessionCts);
+            _log.LogInformation("remote-session {Id}: started ({Grant} per grant, up to {Max} in total)",
+                sessionId, _config.RemoteSessionGrant, _config.RemoteSessionAbsoluteMax);
+
+            var exit = await RunSessionLoopAsync(machine, sessionId, banner, sessionCts);
+            if (exit == 0) outcome = _endReason ?? "disconnected";
+            return exit;
         }
         finally
         {
+            // Always leave a record, including for sessions that never connected — "someone tried
+            // to open a session on this machine" is exactly what an audit trail exists to answer.
+            AppendAudit(machine, sessionId, startedUtc, outcome);
+
             // RequestClose() only reaches an already-created window; if the session ends
             // before the banner has finished being created on its own thread (e.g. an
             // immediate relay connect failure), the first request would land too early and
@@ -108,6 +128,76 @@ public sealed class RemoteSessionService : IRemoteSessionService
     private static void SafeCancel(CancellationTokenSource cts)
     {
         try { cts.Cancel(); } catch (ObjectDisposedException) { /* session already finishing */ }
+    }
+
+    /// <summary>Record how the session ended. First writer wins: several paths can race to end a
+    /// session (banner click, operator, timeout) and the one that actually got there first is the
+    /// one worth auditing.</summary>
+    private void SetEndReason(string reason) => Interlocked.CompareExchange(ref _endReason, reason, null);
+
+    private string? _endReason;
+
+    /// <summary>Give the session another grant of time and push the hard deadline out. Returns
+    /// false when the ceiling is reached — at that point the session ends on schedule no matter
+    /// what the console asks for, which is the whole point of having a hard timeout.</summary>
+    private bool GrantTime(CancellationTokenSource sessionCts)
+    {
+        if (_grantsUsed >= OrchestratorConfig.MaxSessionGrants) return false;
+        _grantsUsed++;
+
+        var deadline = DateTimeOffset.UtcNow + _config.RemoteSessionGrant;
+        Interlocked.Exchange(ref _deadlineTicks, deadline.UtcTicks);
+        Interlocked.Exchange(ref _deadlineChanged, 1);
+        try { sessionCts.CancelAfter(_config.RemoteSessionGrant); }   // re-arms the timer, it doesn't stack
+        catch (ObjectDisposedException) { return false; }
+        return true;
+    }
+
+    private DateTimeOffset Deadline => new(Interlocked.Read(ref _deadlineTicks), TimeSpan.Zero);
+
+    /// <summary>The banner always says when the session is due to end, so whoever is at the
+    /// machine can see the window they're inside — and sees it move if the operator renews.</summary>
+    private string ActiveBannerText()
+        => $"Remote control active until {Deadline.ToLocalTime():HH:mm} — click to end";
+
+    private void AppendAudit(MachineConfig machine, string sessionId, DateTimeOffset startedUtc, string outcome)
+    {
+        var endedUtc = DateTimeOffset.UtcNow;
+        var record = new RemoteSessionRecord
+        {
+            SessionId = sessionId,
+            MachineId = machine.MachineId,
+            Hostname = Environment.MachineName,
+            StartedUtc = startedUtc.ToString("O"),
+            EndedUtc = endedUtc.ToString("O"),
+            DurationSeconds = Math.Round((endedUtc - startedUtc).TotalSeconds, 2),
+            Outcome = outcome,
+            InputEvents = Interlocked.Read(ref _injectedEvents),
+            Renewals = Math.Max(0, _grantsUsed - 1)
+        };
+
+        try
+        {
+            Directory.CreateDirectory(_config.LogsPath);
+            var audit = new RemoteSessionAudit();
+            if (File.Exists(_config.RemoteSessionAuditPath))
+            {
+                // A truncated or corrupt file must not cost us THIS record — start a fresh log
+                // rather than throwing away the session we're in the middle of writing down.
+                try { audit = JsonSerializer.Deserialize<RemoteSessionAudit>(File.ReadAllText(_config.RemoteSessionAuditPath)) ?? new(); }
+                catch (Exception ex) { _log.LogWarning(ex, "remote-sessions.json unreadable; starting a new audit log"); audit = new(); }
+            }
+            audit.Append(record);
+            File.WriteAllText(_config.RemoteSessionAuditPath,
+                JsonSerializer.Serialize(audit, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not write remote-sessions.json");   // best-effort, like sync history
+        }
+
+        _log.LogInformation("remote-session {Id}: {Outcome} after {Seconds}s ({Events} input events, {Renewals} renewal(s))",
+            sessionId, outcome, record.DurationSeconds, record.InputEvents, record.Renewals);
     }
 
     /// <summary>Leave a failure reason on screen long enough to be read (or until whoever is at
@@ -134,13 +224,27 @@ public sealed class RemoteSessionService : IRemoteSessionService
         using (ws)
         {
             _log.LogInformation("remote-session {Id}: connected to relay {Url}", sessionId, uri);
-            banner.SetState(ActiveText, SessionBanner.ColorActive);
+            banner.SetState(ActiveBannerText(), SessionBanner.ColorActive);
 
-            var receiveTask = ReceiveLoopAsync(ws, sessionId, sessionCts);
+            var receiveTask = ReceiveLoopAsync(ws, sessionId, banner, sessionCts);
+            var nextDeadlineBroadcast = DateTimeOffset.MinValue;
             try
             {
                 while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
                 {
+                    // The deadline goes out from THIS loop and nowhere else. A WebSocket tolerates
+                    // one concurrent writer, and the frame loop is it — the receive loop only ever
+                    // updates the deadline and flags it, never writes to the socket itself.
+                    var now = DateTimeOffset.UtcNow;
+                    if (now >= nextDeadlineBroadcast || Interlocked.Exchange(ref _deadlineChanged, 0) == 1)
+                    {
+                        nextDeadlineBroadcast = now + DeadlineBroadcast;
+                        var canRenew = _grantsUsed < OrchestratorConfig.MaxSessionGrants;
+                        var json = $"{{\"t\":\"deadline\",\"untilUtc\":\"{Deadline.UtcDateTime:O}\",\"canRenew\":{(canRenew ? "true" : "false")}}}";
+                        try { await ws.SendAsync(System.Text.Encoding.UTF8.GetBytes(json).AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct); }
+                        catch (Exception ex) { _log.LogDebug(ex, "remote-session {Id}: deadline broadcast failed", sessionId); break; }
+                    }
+
                     var jpeg = _capture.CaptureJpeg();
                     if (jpeg is not null)
                     {
@@ -252,7 +356,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
     /// <summary>Reads input events from the relay and injects them on this machine, until the
     /// session ends. Anything unparseable is dropped — see RemoteInputEvent.TryParse. Whatever
     /// ends the loop, every key and button still held is released on the way out.</summary>
-    private async Task ReceiveLoopAsync(ClientWebSocket ws, string sessionId, CancellationTokenSource sessionCts)
+    private async Task ReceiveLoopAsync(ClientWebSocket ws, string sessionId, SessionBanner banner, CancellationTokenSource sessionCts)
     {
         var ct = sessionCts.Token;
         var buffer = new byte[4096];
@@ -289,10 +393,30 @@ public sealed class RemoteSessionService : IRemoteSessionService
                 if (evt.Kind == RemoteInputKind.End)
                 {
                     _log.LogInformation("remote-session {Id}: operator ended the session", sessionId);
+                    SetEndReason("operator");
                     SafeCancel(sessionCts);
                     break;
                 }
+                if (evt.Kind == RemoteInputKind.Renew)
+                {
+                    // Nothing renews itself. The operator asked, and the person at the machine
+                    // sees the new end time appear on the banner.
+                    if (GrantTime(sessionCts))
+                    {
+                        banner.SetState(ActiveBannerText(), SessionBanner.ColorActive);
+                        _log.LogInformation("remote-session {Id}: extended to {Deadline:u} (grant {Used}/{Max})",
+                            sessionId, Deadline, _grantsUsed, OrchestratorConfig.MaxSessionGrants);
+                    }
+                    else
+                    {
+                        _log.LogInformation("remote-session {Id}: renewal refused — already at the {Max}-grant ceiling",
+                            sessionId, OrchestratorConfig.MaxSessionGrants);
+                        Interlocked.Exchange(ref _deadlineChanged, 1);   // re-tell the viewer, which will hide its Renew button
+                    }
+                    continue;
+                }
                 _input.Inject(evt);
+                Interlocked.Increment(ref _injectedEvents);
             }
         }
         catch (OperationCanceledException) { /* session ending */ }

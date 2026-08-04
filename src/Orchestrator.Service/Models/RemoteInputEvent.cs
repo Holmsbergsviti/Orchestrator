@@ -31,7 +31,8 @@ public enum RemoteInputKind
     Wheel,
     KeyDown,
     KeyUp,
-    End       // the operator asked to end the session
+    End,      // the operator asked to end the session
+    Renew     // the operator asked for another grant of session time
 }
 
 public sealed class RemoteInputEvent
@@ -75,6 +76,7 @@ public sealed class RemoteInputEvent
                 "keydown" => RemoteInputKind.KeyDown,
                 "keyup" => RemoteInputKind.KeyUp,
                 "end" => RemoteInputKind.End,
+                "renew" => RemoteInputKind.Renew,
                 _ => RemoteInputKind.Unknown
             };
             if (kind == RemoteInputKind.Unknown) return false;

@@ -70,8 +70,22 @@ public sealed class OrchestratorConfig
     /// which is stricter than normal CA trust, not weaker. Blank = require normal chain trust.</summary>
     public string RelayCertThumbprint { get; set; } = string.Empty;
 
-    /// <summary>Hard cap on how long a single remote-control session may run before it's force-ended.</summary>
+    /// <summary>How long one grant of remote-control time lasts before the session force-ends.
+    /// The operator can explicitly renew it from the console, up to <see cref="MaxSessionGrants"/>
+    /// times in total — so this is the longest a session can run unattended, not the longest it
+    /// can possibly run.</summary>
     public int RemoteSessionMaxMinutes { get; set; } = 30;
+
+    /// <summary>The ceiling on renewals. "Renewable" has to stop somewhere, or the hard timeout
+    /// is decorative: a session left open would live forever as long as someone kept clicking.</summary>
+    public const int MaxSessionGrants = 4;
+
+    /// <summary>One grant of session time.</summary>
+    [JsonIgnore] public TimeSpan RemoteSessionGrant => TimeSpan.FromMinutes(Math.Max(1, RemoteSessionMaxMinutes));
+
+    /// <summary>The longest a session can run even if renewed every time. Sizes the scheduled
+    /// task's own kill-switch, which otherwise would cut a legitimately renewed session short.</summary>
+    [JsonIgnore] public TimeSpan RemoteSessionAbsoluteMax => RemoteSessionGrant * MaxSessionGrants;
 
     [JsonIgnore] public string ProgramsPath => Path.Combine(RootPath, "programs");                    // <root>\programs — installed program files
     [JsonIgnore] public string LogsPath => Path.Combine(RootPath, "logs");                            // <root>\logs — log files
@@ -79,6 +93,7 @@ public sealed class OrchestratorConfig
     [JsonIgnore] public string LocalManifestPath => Path.Combine(CachePath, "local-manifest.json");   // last manifest we applied
     [JsonIgnore] public string ChecksumsPath => Path.Combine(CachePath, "checksums.json");            // known-good file fingerprints
     [JsonIgnore] public string SyncHistoryPath => Path.Combine(LogsPath, "sync-history.json");        // history of past sync runs
+    [JsonIgnore] public string RemoteSessionAuditPath => Path.Combine(LogsPath, "remote-sessions.json");  // audit trail of remote-control sessions
     [JsonIgnore] public string MachineConfigPath => Path.Combine(RootPath, "config.json");            // this machine's own state file
     [JsonIgnore] public string LastHeartbeatPath => Path.Combine(CachePath, "last-heartbeat.json");   // the last heartbeat we pushed (for change detection)
 }
