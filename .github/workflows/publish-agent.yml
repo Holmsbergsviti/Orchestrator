@@ -1,0 +1,122 @@
+# =====================================================================================
+# FILE PURPOSE (in plain terms):
+#   Builds the agent on every push to main and publishes it to the fleet:
+#     1. cross-compiles the self-contained win-x64 exe (a Linux runner can do this),
+#     2. force-pushes it as the ONLY commit on the `dist` branch,
+#     3. records its SHA-256 in agent.json in the private CONTROL repo.
+#   Agents read agent.json each sync, and install the binary only if it hashes to the value
+#   recorded there — so the checksum has to live in the control repo, which this workflow
+#   needs a separate token to write. See docs/SETUP.md.
+#
+#   dist is force-pushed as an orphan commit deliberately: a 36 MB binary committed on every
+#   push would add ~36 MB to the repo forever, and within a month cloning would be painful.
+#   Rewriting it each time keeps exactly one copy.
+# =====================================================================================
+
+name: Publish agent
+
+on:
+  push:
+    branches: [main]
+    # Docs-only pushes don't change the binary, so they don't need to disturb the fleet.
+    paths:
+      - 'src/**'
+      - 'defaults.json'
+      - 'Orchestrator.sln'
+      - '.github/workflows/publish-agent.yml'
+  workflow_dispatch:   # lets you republish by hand without an empty commit
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to force-push the dist branch of THIS repo
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run the tests
+        # A build that fails its tests must never reach the fleet. This is the only gate
+        # between a push and every machine you own installing it.
+        run: dotnet test --configuration Release
+
+      - name: Publish the win-x64 agent
+        run: |
+          dotnet publish src/Orchestrator.Service/Orchestrator.Service.csproj \
+            -c Release -r win-x64 --self-contained true -o publish
+
+      - name: Compute the checksum
+        id: hash
+        run: |
+          EXE_NAME=$(python3 -c "import json;print(json.load(open('defaults.json'))['exeName'])")
+          SHA=$(sha256sum "publish/$EXE_NAME" | cut -d' ' -f1)
+          echo "exe_name=$EXE_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Published $EXE_NAME with SHA-256 $SHA"
+
+      - name: Publish the binary to the dist branch
+        env:
+          EXE_NAME: ${{ steps.hash.outputs.exe_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # An orphan branch with a single commit: no history, so the repo doesn't grow by
+          # 36 MB per push.
+          rm -rf /tmp/dist && mkdir -p /tmp/dist
+          cp "publish/$EXE_NAME" "/tmp/dist/$EXE_NAME"
+          cd /tmp/dist
+          git init -q -b dist
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$EXE_NAME"
+          git commit -q -m "dist: agent built from ${GITHUB_SHA}"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" dist:dist
+
+      - name: Record the release in the control repo
+        # This is what actually authorises the fleet to install the new build. Without it the
+        # binary sits on dist and every agent ignores it, because nothing vouches for the hash.
+        env:
+          CONTROL_TOKEN: ${{ secrets.CONTROL_REPO_TOKEN }}
+          CONTROL_REPO: ${{ vars.CONTROL_REPO }}
+          EXE_NAME: ${{ steps.hash.outputs.exe_name }}
+          SHA256: ${{ steps.hash.outputs.sha256 }}
+        run: |
+          if [ -z "$CONTROL_TOKEN" ] || [ -z "$CONTROL_REPO" ]; then
+            echo "::error::CONTROL_REPO_TOKEN secret or CONTROL_REPO variable is not set."
+            echo "::error::The binary is published but no agent will install it until agent.json is written."
+            echo "::error::See docs/SETUP.md, 'Automatic agent updates'."
+            exit 1
+          fi
+          rm -rf /tmp/control
+          git clone -q --depth 1 "https://x-access-token:${CONTROL_TOKEN}@github.com/${CONTROL_REPO}.git" /tmp/control
+          cd /tmp/control
+          python3 - <<PY
+          import json, os, datetime
+          release = {
+              "sha256": os.environ["SHA256"],
+              "exeUrl": f"https://raw.githubusercontent.com/{os.environ['GITHUB_REPOSITORY']}/dist/{os.environ['EXE_NAME']}",
+              "commit": os.environ["GITHUB_SHA"][:12],
+              "publishedUtc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "enabled": True,
+          }
+          with open("agent.json", "w") as f:
+              json.dump(release, f, indent=2)
+              f.write("\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agent.json
+          # Nothing to commit when a rebuild is byte-identical, which is not a failure.
+          git diff --staged --quiet || git commit -q -m "agent: publish build ${GITHUB_SHA:0:12}"
+          git push -q origin HEAD
+
+      - name: Summary
+        run: |
+          echo "### Agent published" >> "$GITHUB_STEP_SUMMARY"
+          echo "SHA-256: \`${{ steps.hash.outputs.sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Every machine with AutoUpdate enabled will install this within one sync interval." >> "$GITHUB_STEP_SUMMARY"
