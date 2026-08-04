@@ -160,10 +160,28 @@ if ($BuildFromSource) {
 # --- Install via the repo's install.ps1 (run as a scriptblock to avoid execution policy) ---
 Write-Host "Installing the Windows service..."
 $installText = (New-Object System.Net.WebClient).DownloadString("https://raw.githubusercontent.com/$CodeRepo/main/scripts/install.ps1")  # fetch the install script's text
-# Turn that text into a runnable block and call it, passing along all our settings + the freshly built/downloaded exe folder.
-& ([scriptblock]::Create($installText)) `
-    -RepoOwner $RepoOwner -RepoName $RepoName -Token $Token -Branch $Branch `
-    -IntervalMinutes $IntervalMinutes -InstallRoot $InstallRoot -SourceDir $pub -DefaultsPath $defaultsFile `
-    -IsWaker:$IsWaker -RelayUrl $RelayUrl -RelayCertThumbprint $RelayCertThumbprint
+
+# Forward ONLY the settings actually typed on the command line. install.ps1 keeps whatever it
+# already has for anything not passed, so relaying our own resolved defaults here would defeat
+# that entirely and reset every setting the caller didn't happen to repeat.
+$installArgs = @{ InstallRoot = $InstallRoot; SourceDir = $pub; DefaultsPath = $defaultsFile }
+foreach ($p in 'RepoOwner', 'RepoName', 'Token', 'Branch', 'IntervalMinutes', 'IsWaker', 'RelayUrl', 'RelayCertThumbprint') {
+    if ($PSBoundParameters.ContainsKey($p)) { $installArgs[$p] = $PSBoundParameters[$p] }
+}
+# Turn the downloaded text into a runnable block (dodging execution policy) and call it.
+& ([scriptblock]::Create($installText)) @installArgs
+
+# Leave install.ps1 and defaults.json in the install folder, so changing a setting later is a
+# local one-argument command instead of downloading all this again.
+try {
+    Set-Content -Path (Join-Path $InstallRoot "install.ps1") -Value $installText -Encoding UTF8
+    Copy-Item -Path $defaultsFile -Destination (Join-Path $InstallRoot "defaults.json") -Force
+} catch {
+    Write-Warning "Could not leave a local copy of install.ps1 ($($_.Exception.Message)); reconfiguring will need this bootstrap command again."
+}
 
 Write-Host "Bootstrap complete. Logs: $InstallRoot\logs" -ForegroundColor Green  # final success message + where to find logs
+Write-Host "To change a setting later, run this on that machine (no download, nothing else to repeat):" -ForegroundColor Cyan
+# -ExecutionPolicy Bypass because this copy is an unsigned local script: on a machine set to
+# Restricted, calling it directly would just be refused.
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$InstallRoot\install.ps1`" -RelayCertThumbprint <new value>" -ForegroundColor Cyan

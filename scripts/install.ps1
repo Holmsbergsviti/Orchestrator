@@ -31,17 +31,31 @@
 .PARAMETER RelayCertThumbprint  The console's HTTPS certificate thumbprint (it prints this too).
                         Required only when that certificate is self-signed.
 
-.EXAMPLE
-    .\install.ps1 -RepoOwner acme -RepoName orchestrator-repo -Token ghp_xxx
+.NOTES
+    Settings you don't pass are PRESERVED from the existing appsettings.json, so only a first
+    install needs the full argument list. A copy of this script and defaults.json is left in the
+    install folder, which means later changes need no download and no repeated arguments.
 
 .EXAMPLE
+    # First install: everything has to be specified, because there's nothing to preserve yet.
     .\install.ps1 -RepoOwner acme -RepoName orchestrator-repo -Token ghp_xxx `
         -RelayUrl wss://192.168.1.20:5080 -RelayCertThumbprint A1B2C3...
+
+.EXAMPLE
+    # Later: change one setting. Everything else stays as it is.
+    powershell -ExecutionPolicy Bypass -File C:\Windows\Orch\install.ps1 -RelayCertThumbprint D4E5F6...
+
+.EXAMPLE
+    # Upgrade binaries only, keeping every setting.
+    .\install.ps1 -SourceDir .\publish
 #>
 [CmdletBinding()]                                                # enable common parameters (-Verbose, -ErrorAction, ...)
 param(
-    [Parameter(Mandatory)] [string]$RepoOwner,                  # GitHub owner of the control repo (required)
-    [Parameter(Mandatory)] [string]$RepoName,                   # control repo name (required)
+    # Required for a FIRST install only. On a machine that's already installed, anything you
+    # don't pass is kept from the existing appsettings.json, so changing one setting is one
+    # parameter rather than the whole list again.
+    [string]$RepoOwner = "",                                    # GitHub owner of the control repo
+    [string]$RepoName = "",                                     # control repo name
     [string]$Token = "",                                        # access token; blank means the repo is public
     [string]$Branch = "",                                       # branch to read (blank -> filled from defaults.json)
     [int]$IntervalMinutes = 0,                                   # sync interval in minutes (0 -> filled from defaults.json)
@@ -56,29 +70,76 @@ param(
 $ErrorActionPreference = "Stop"                                 # abort on the first error
 
 # --- Load shared defaults (single source of truth) -------------------------------
-# defaults.json lives at the repo root next to this scripts/ folder. Every fixed name
-# and path (service name, exe name, install root, etc.) is read from it, so you only
-# ever change those in one place. -DefaultsPath lets bootstrap.ps1 point us at a copy
-# it downloaded, since a piped-in script has no file of its own on disk.
-$defaultsFile = if ($DefaultsPath) { $DefaultsPath } else { Join-Path $PSScriptRoot "..\defaults.json" }  # where to read defaults from
+# Every fixed name and path (service name, exe name, install root, ...) is read from
+# defaults.json, so you only ever change those in one place. Two layouts to support: the repo
+# (scripts\install.ps1 with defaults.json one level up) and the install folder, where a copy of
+# both sits side by side so reconfiguring later needs no download.
+# $PSScriptRoot is empty when this text is run as a scriptblock (how bootstrap.ps1 invokes it),
+# which is exactly when -DefaultsPath is supplied instead.
+$defaultsFile = $DefaultsPath
+if (-not $defaultsFile -and $PSScriptRoot) {
+    $localCopy = Join-Path $PSScriptRoot "defaults.json"        # install-folder layout
+    $repoCopy  = Join-Path $PSScriptRoot "..\defaults.json"     # repo layout
+    if (Test-Path $localCopy) { $defaultsFile = $localCopy } else { $defaultsFile = $repoCopy }
+}
+if (-not $defaultsFile) { throw "Cannot locate defaults.json; pass -DefaultsPath explicitly." }
 if (-not (Test-Path $defaultsFile)) { throw "defaults.json not found at '$defaultsFile'." }               # it must exist
 $D = Get-Content $defaultsFile -Raw | ConvertFrom-Json          # parse the shared defaults
 
 $ServiceName = $D.serviceName                                  # the Windows service's internal name (from defaults.json)
 $ExeName     = $D.exeName                                       # the executable file name (from defaults.json)
 if (-not $InstallRoot)     { $InstallRoot = $D.installRoot }    # fill install folder if the caller didn't set it
-if (-not $Branch)          { $Branch = $D.defaultBranch }       # fill branch if not set
-if (-not $IntervalMinutes) { $IntervalMinutes = [int]$D.defaultSyncIntervalMinutes }  # fill interval if not set
 
 # --- Elevation check ---
+# Before touching appsettings.json: the install folder is readable only by SYSTEM and
+# Administrators, so a non-elevated run would fail to read it and look like a fresh machine
+# rather than reporting the real problem.
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())  # who is running this
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {                          # not an admin?
     throw "Must run as Administrator."                                                                            # then stop
 }
 
-# Make sure the exe we're supposed to install actually exists before doing anything.
-if (-not (Test-Path (Join-Path $SourceDir $ExeName))) {
-    throw "Published binary not found: $(Join-Path $SourceDir $ExeName). Run: dotnet publish -c Release -r win-x64"
+# --- Merge with the settings already on this machine ------------------------------
+# This file is rewritten from scratch every run, so anything NOT carried over here is
+# silently reset to a default. That's how RelayUrl used to disappear on every upgrade.
+# So: an explicitly-passed parameter wins, otherwise keep what's already installed,
+# otherwise fall back to defaults.json.
+$settingsPath = Join-Path $InstallRoot "appsettings.json"
+$old = $null
+if (Test-Path $settingsPath) {
+    try { $old = (Get-Content $settingsPath -Raw | ConvertFrom-Json).Orchestrator }
+    catch { Write-Warning "Existing appsettings.json is unreadable; treating this as a fresh install." }
+}
+
+# $PSBoundParameters is per-scope, so snapshot the SCRIPT's copy here rather than reading it
+# from inside a helper function, where it would describe that function's arguments instead.
+# Checking it (not emptiness) is what distinguishes "left it out" from "deliberately set it
+# to blank" — clearing RelayUrl to switch remote control off has to remain possible.
+$given = $PSBoundParameters
+
+$RepoOwner           = if ($given.ContainsKey('RepoOwner'))           { $RepoOwner }           elseif ($old -and $old.RepoOwner)           { $old.RepoOwner }           else { "" }
+$RepoName            = if ($given.ContainsKey('RepoName'))            { $RepoName }            elseif ($old -and $old.RepoName)            { $old.RepoName }            else { "" }
+$Token               = if ($given.ContainsKey('Token'))               { $Token }               elseif ($old -and $old.GitHubToken)         { $old.GitHubToken }         else { "" }
+$Branch              = if ($given.ContainsKey('Branch'))              { $Branch }              elseif ($old -and $old.Branch)              { $old.Branch }              else { $D.defaultBranch }
+$IntervalMinutes     = if ($given.ContainsKey('IntervalMinutes'))     { $IntervalMinutes }     elseif ($old -and $old.SyncIntervalMinutes)  { [int]$old.SyncIntervalMinutes } else { [int]$D.defaultSyncIntervalMinutes }
+$RelayUrl            = if ($given.ContainsKey('RelayUrl'))            { $RelayUrl }            elseif ($old -and $old.RelayUrl)            { $old.RelayUrl }            else { "" }
+$RelayCertThumbprint = if ($given.ContainsKey('RelayCertThumbprint')) { $RelayCertThumbprint } elseif ($old -and $old.RelayCertThumbprint) { $old.RelayCertThumbprint } else { "" }
+$IsWakerValue        = if ($given.ContainsKey('IsWaker'))             { [bool]$IsWaker }       elseif ($old)                               { [bool]$old.IsWaker }       else { $false }
+
+if (-not $RepoOwner -or -not $RepoName) {
+    throw "No existing install found at '$InstallRoot', so -RepoOwner and -RepoName are required for a first install."
+}
+
+# Are there binaries to install? If not, and this machine already has them, treat the run as a
+# settings-only reconfigure — that's what makes "change one setting" a short command instead of
+# a 36 MB download. Without an existing install there's nothing to fall back on, so it's fatal.
+$haveBinaries = Test-Path (Join-Path $SourceDir $ExeName)
+$alreadyInstalled = Test-Path (Join-Path $InstallRoot $ExeName)
+if (-not $haveBinaries) {
+    if (-not $alreadyInstalled) {
+        throw "Published binary not found: $(Join-Path $SourceDir $ExeName). Run: dotnet publish -c Release -r win-x64"
+    }
+    Write-Host "No new binaries supplied - reconfiguring the existing install." -ForegroundColor Cyan
 }
 
 Write-Host "Installing to $InstallRoot ..."
@@ -91,11 +152,25 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {  # is the se
     Start-Sleep -Seconds 2                                                # give Windows a moment to release the file
 }
 
-Copy-Item -Path (Join-Path $SourceDir '*') -Destination $InstallRoot -Recurse -Force  # copy the built files into the install folder
+if ($haveBinaries) {
+    Copy-Item -Path (Join-Path $SourceDir '*') -Destination $InstallRoot -Recurse -Force  # copy the built files into the install folder
+}
+
+# Leave this script and defaults.json beside the install, so reconfiguring later needs nothing
+# downloaded and no arguments beyond the one being changed. Skipped when they're already the
+# same file — which is exactly the case when this IS the local copy being re-run.
+$installedScript   = Join-Path $InstallRoot "install.ps1"
+$installedDefaults = Join-Path $InstallRoot "defaults.json"
+if ($PSCommandPath -and $PSCommandPath -ne $installedScript) {
+    Copy-Item -Path $PSCommandPath -Destination $installedScript -Force -ErrorAction SilentlyContinue
+}
+if ((Resolve-Path $defaultsFile).Path -ne $installedDefaults) {
+    Copy-Item -Path $defaultsFile -Destination $installedDefaults -Force -ErrorAction SilentlyContinue
+}
 
 # --- Write settings ---
 $exePath  = Join-Path $InstallRoot $ExeName            # full path to the installed exe
-$settings = Join-Path $InstallRoot "appsettings.json"  # full path to the settings file we'll write
+$settings = $settingsPath                              # full path to the settings file we'll write
 # Build the settings object (ordered so the JSON keys come out in a predictable order).
 $config = [ordered]@{
     Orchestrator = [ordered]@{
@@ -108,7 +183,7 @@ $config = [ordered]@{
         SyncIntervalMinutes = $IntervalMinutes    # minutes between sync cycles
         StartupRegistryKey  = $D.registryRunKey   # registry path for startup entries (from defaults.json)
         RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)
-        IsWaker             = [bool]$IsWaker       # true = this machine sends Wake-on-LAN packets for the fleet
+        IsWaker             = $IsWakerValue        # true = this machine sends Wake-on-LAN packets for the fleet
         # Live remote control. This file is rewritten from scratch on every install, so anything
         # missing here is silently reset to its built-in default — which is exactly how a
         # hand-edited RelayUrl would disappear on the next upgrade. Pass it as a parameter instead.

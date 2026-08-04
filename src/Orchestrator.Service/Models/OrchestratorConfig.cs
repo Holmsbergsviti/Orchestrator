@@ -67,7 +67,10 @@ public sealed class OrchestratorConfig
     /// <summary>SHA-1 thumbprint of the console's HTTPS certificate, as shown by the console at
     /// startup (spaces/colons are ignored). Set this when the console uses a self-signed
     /// certificate: the agent then accepts exactly that one certificate and nothing else —
-    /// which is stricter than normal CA trust, not weaker. Blank = require normal chain trust.</summary>
+    /// which is stricter than normal CA trust, not weaker. Blank = require normal chain trust.
+    /// Note that pinning replaces chain validation entirely, so a pinned certificate keeps
+    /// working past its expiry date: identity here is "is this the exact certificate I was
+    /// told to trust", which a calendar has no bearing on.</summary>
     public string RelayCertThumbprint { get; set; } = string.Empty;
 
     /// <summary>How long one grant of remote-control time lasts before the session force-ends.

@@ -342,7 +342,21 @@ System.Console.WriteLine();
 System.Console.WriteLine("Remote control — settings for the agents (see docs/SETUP.md):");
 System.Console.WriteLine($"  Orchestrator:RelayUrl            = {DeriveRelayUrl(listenUrl)}");
 if (cert is not null)
+{
     System.Console.WriteLine($"  Orchestrator:RelayCertThumbprint = {cert.Thumbprint}   (needed if this certificate is self-signed)");
+    // Agents pin by thumbprint and ignore expiry, so this date breaks nothing on the fleet —
+    // it only decides when your BROWSER starts complaining. Print it anyway: a date nobody can
+    // see is a date that surprises you, and replacing the certificate means re-pinning every agent.
+    var daysLeft = (int)(cert.NotAfter.ToUniversalTime() - DateTime.UtcNow).TotalDays;
+    System.Console.WriteLine(daysLeft switch
+    {
+        < 0 => $"  Certificate EXPIRED {-daysLeft} day(s) ago. Agents still connect (they pin the thumbprint);\n" +
+               "        your browser will warn until you replace it — and replacing it changes the thumbprint.",
+        < 60 => $"  Certificate expires in {daysLeft} day(s) ({cert.NotAfter:yyyy-MM-dd}). Replacing it changes the\n" +
+                "        thumbprint above, so every agent needs reinstalling with the new value.",
+        _ => $"  Certificate valid until {cert.NotAfter:yyyy-MM-dd} ({daysLeft} days)."
+    });
+}
 if (isLocalOnly)
     System.Console.WriteLine("  NOTE: this console is bound to localhost, so only an agent on THIS machine can reach it.\n" +
                              "        To control other machines, set Urls to https://0.0.0.0:<port> (which also requires\n" +

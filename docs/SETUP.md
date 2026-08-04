@@ -143,9 +143,18 @@ name):
     -RelayUrl wss://192.168.1.20:5080 -RelayCertThumbprint THUMBPRINT-OF-YOUR-OWN-CERT
 ```
 
-Drop `-RelayCertThumbprint` if the console uses a certificate from a real CA. `install.ps1`
-rewrites `appsettings.json` from scratch every run, so pass these as parameters rather than
-hand-editing the file — an edit would be wiped on the next upgrade.
+Drop `-RelayCertThumbprint` if the console uses a certificate from a real CA. Pass these as
+parameters rather than hand-editing `appsettings.json` — the installer rewrites that file.
+
+**Changing a setting later** doesn't need any of this again. The installer leaves a copy of
+itself and `defaults.json` in the install folder, and preserves every setting you don't pass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Windows\Orch\install.ps1 -RelayCertThumbprint <new value>
+```
+
+That re-pins a regenerated certificate and restarts the service, keeping the repo, token,
+interval and relay address exactly as they were. Only a *first* install needs the full list.
 
 Then use **Remote** in the console (see [CONSOLE.md](CONSOLE.md)). A session starts on that
 machine's next sync, so lower `-IntervalMinutes` on machines you want to reach quickly.
