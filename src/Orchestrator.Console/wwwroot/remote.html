@@ -2,9 +2,12 @@
 <!--
   FILE PURPOSE (in plain terms): The live remote-control viewer. Opened in its own tab from
   the console's "Remote" button. Connects to /relay/view?sessionId=... over a WebSocket, draws
-  each incoming JPEG frame to a canvas, and (once Phase 3 lands) will forward mouse/keyboard
-  events back over the same socket. Phase 2 is view-only — there's no input capture wired up
-  here yet.
+  each incoming JPEG frame to a canvas, and sends your mouse and keyboard back over the same
+  socket as small JSON messages.
+
+  While input is on, this page deliberately swallows your browser's own shortcuts so they
+  reach the remote machine instead of this tab — which is exactly why the "Input: on/off"
+  button exists and has to stay easy to find.
 
   It also reports exactly which stage the session is at, because a black canvas on its own
   says nothing: waiting for the target machine to notice the request, connected but no frames
@@ -40,6 +43,7 @@
     <h1 id="title">Remote control</h1>
     <span class="status" id="status">Connecting…</span>
     <span class="spacer"></span>
+    <button id="inputToggle" title="When on, your mouse and keyboard drive the remote machine and normal browser shortcuts are suppressed">Input: on</button>
     <button id="end">End session</button>
   </header>
   <main>
@@ -168,7 +172,83 @@
         }
       };
 
-      document.getElementById('end').onclick = () => ws.close();
+      // ---- input capture (mouse + keyboard -> the remote machine) --------------------
+      // Positions go out as FRACTIONS of the canvas, never pixels: the canvas holds a
+      // downscaled capture of the whole virtual desktop whose size can change mid-session,
+      // and the agent maps fractions straight onto Windows' absolute coordinate space.
+      let inputEnabled = true;
+      let lastMoveSent = 0;
+      const toggle = document.getElementById('inputToggle');
+
+      const send = (obj) => { if (inputEnabled && ws.readyState === 1) ws.send(JSON.stringify(obj)); };
+
+      const pos = (ev) => {
+        const r = canvas.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return null;
+        return { x: (ev.clientX - r.left) / r.width, y: (ev.clientY - r.top) / r.height };
+      };
+
+      const BUTTONS = { 0: 'left', 1: 'middle', 2: 'right' };
+
+      canvas.addEventListener('mousemove', (ev) => {
+        // ~60/s is plenty for a 5 fps view and keeps one flick of the wrist from queueing
+        // hundreds of messages behind a slow link.
+        const now = performance.now();
+        if (now - lastMoveSent < 16) return;
+        lastMoveSent = now;
+        const p = pos(ev); if (p) send({ t: 'mousemove', x: p.x, y: p.y });
+      });
+
+      canvas.addEventListener('mousedown', (ev) => {
+        const p = pos(ev); const b = BUTTONS[ev.button];
+        if (p && b) { ev.preventDefault(); send({ t: 'mousedown', x: p.x, y: p.y, button: b }); }
+      });
+
+      canvas.addEventListener('mouseup', (ev) => {
+        const p = pos(ev); const b = BUTTONS[ev.button];
+        if (p && b) { ev.preventDefault(); send({ t: 'mouseup', x: p.x, y: p.y, button: b }); }
+      });
+
+      // Without this the browser's own menu opens on right-click and the remote never sees it.
+      canvas.addEventListener('contextmenu', (ev) => { if (inputEnabled) ev.preventDefault(); });
+
+      canvas.addEventListener('wheel', (ev) => {
+        const p = pos(ev); if (!p) return;
+        if (inputEnabled) ev.preventDefault();
+        // Browsers report wheel deltas in wildly different units; the sign and one notch per
+        // event is all that survives translation, so normalize to that. Negative deltaY is a
+        // scroll up, which is a POSITIVE wheel notch on Windows.
+        send({ t: 'wheel', x: p.x, y: p.y, dy: ev.deltaY < 0 ? 1 : -1 });
+      }, { passive: false });
+
+      // Keyboard is captured on the window, not the canvas, so it works without clicking first.
+      const onKey = (ev) => {
+        if (!inputEnabled) return;
+        // Some events carry no physical key at all (IME composition, synthetic dispatches).
+        // There's nothing to press on the far end, so don't put them on the wire.
+        if (!ev.code) return;
+        // Suppress the local browser's shortcuts (Ctrl+W, F5, Ctrl+T...) so they reach the
+        // remote machine instead of acting on this tab. That's also exactly why the Input
+        // toggle exists — it's the way back out.
+        ev.preventDefault();
+        send({ t: ev.type === 'keydown' ? 'keydown' : 'keyup', code: ev.code });
+      };
+      window.addEventListener('keydown', onKey);
+      window.addEventListener('keyup', onKey);
+
+      toggle.onclick = () => {
+        inputEnabled = !inputEnabled;
+        toggle.textContent = 'Input: ' + (inputEnabled ? 'on' : 'off');
+        canvas.style.cursor = inputEnabled ? 'crosshair' : 'default';
+      };
+      canvas.style.cursor = 'crosshair';
+
+      document.getElementById('end').onclick = () => {
+        // Tell the agent first so it tears down deliberately (releasing anything still held)
+        // rather than discovering a dropped socket.
+        if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'end' }));
+        ws.close();
+      };
     }
   </script>
 </body>

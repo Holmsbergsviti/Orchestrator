@@ -97,6 +97,18 @@ memory only, so a console restart cancels them.
 **The picture is live but frozen or black** — capture returns nothing while the workstation is
 locked, on the UAC secure desktop, or after an RDP disconnect. It resumes on its own.
 
+**The picture is live but clicks and typing do nothing**
+- Check the viewer's **Input: on/off** button — off means view-only.
+- Windows refuses synthetic input aimed at an **elevated** window (Task Manager, regedit, an
+  admin console) or the **secure desktop** (UAC prompt, lock screen, Ctrl+Alt+Del). Nothing
+  can bypass that, by design. The agent logs `SendInput was blocked` at debug level.
+- Keyboard goes to the whole page, not the canvas, so you don't need to click first — but the
+  browser tab does need focus.
+
+**My own browser shortcuts stopped working** — that's the point: while **Input: on**, this tab
+forwards Ctrl+W, F5 and friends to the remote machine instead of acting on itself. Press
+**Input: off** to get them back; the session keeps running.
+
 ## Force an immediate sync
 ```powershell
 Restart-Service GitHubOrchestrator   # first cycle runs on start

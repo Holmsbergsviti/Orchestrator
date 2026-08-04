@@ -4,11 +4,12 @@
 //   (SessionBanner) on a dedicated UI thread, opens an outbound WebSocket to the console's
 //   relay, and loops capturing the screen (reusing ScreenCaptureService) and sending each
 //   frame while the session is active. This is the interactive, long-running counterpart to
-//   ScreenshotService's one-shot capture-and-upload. Phase 2 is view-only: incoming WebSocket
-//   messages (mouse/keyboard input from the console) are received but not yet acted on —
-//   that's wired up in RemoteInputInjector once Phase 3 lands. Whatever ends first — the
-//   banner being closed, the relay disconnecting, or the configured hard timeout — ends the
-//   whole session; there's no path that keeps streaming or listening for input after that.
+//   ScreenshotService's one-shot capture-and-upload. It runs both directions at once: frames
+//   out on the send loop, and the operator's mouse/keyboard events in on the receive loop,
+//   fed to RemoteInputInjector. Whatever ends first — the banner being closed, the operator
+//   ending the session, the relay disconnecting, or the configured hard timeout — ends the
+//   whole session; there's no path that keeps streaming or injecting input after that, and
+//   anything still held down is released on the way out.
 //
 //   Failures are made VISIBLE rather than silent: the banner comes up before the connection
 //   is attempted and, if the session can't start, stays up for a few seconds showing why.
@@ -44,13 +45,15 @@ public sealed class RemoteSessionService : IRemoteSessionService
     private const string ActiveText = "Remote control active — click to end";
 
     private readonly IScreenCaptureService _capture;
+    private readonly IRemoteInputInjector _input;
     private readonly IConfigService _configService;
     private readonly ILogger<RemoteSessionService> _log;
     private readonly OrchestratorConfig _config;
 
-    public RemoteSessionService(IScreenCaptureService capture, IConfigService configService, ILogger<RemoteSessionService> log)
+    public RemoteSessionService(IScreenCaptureService capture, IRemoteInputInjector input, IConfigService configService, ILogger<RemoteSessionService> log)
     {
         _capture = capture;
+        _input = input;
         _configService = configService;
         _config = configService.Config;
         _log = log;
@@ -87,7 +90,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
             }
 
             _log.LogInformation("remote-session {Id}: started (max {Max}min)", sessionId, _config.RemoteSessionMaxMinutes);
-            return await RunSessionLoopAsync(machine, sessionId, banner, sessionCts.Token);
+            return await RunSessionLoopAsync(machine, sessionId, banner, sessionCts);
         }
         finally
         {
@@ -116,8 +119,9 @@ public sealed class RemoteSessionService : IRemoteSessionService
         try { await Task.Delay(ErrorDisplay, ct); } catch (OperationCanceledException) { /* dismissed or shutting down */ }
     }
 
-    private async Task<int> RunSessionLoopAsync(MachineConfig machine, string sessionId, SessionBanner banner, CancellationToken ct)
+    private async Task<int> RunSessionLoopAsync(MachineConfig machine, string sessionId, SessionBanner banner, CancellationTokenSource sessionCts)
     {
+        var ct = sessionCts.Token;
         var uri = new Uri(_config.RelayUrl.TrimEnd('/') + $"/relay/agent?machineId={Uri.EscapeDataString(machine.MachineId)}");
 
         var (ws, error) = await ConnectWithRetriesAsync(uri, sessionId, ct);
@@ -132,7 +136,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
             _log.LogInformation("remote-session {Id}: connected to relay {Url}", sessionId, uri);
             banner.SetState(ActiveText, SessionBanner.ColorActive);
 
-            var receiveTask = ReceiveLoopAsync(ws, sessionId, ct);
+            var receiveTask = ReceiveLoopAsync(ws, sessionId, sessionCts);
             try
             {
                 while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
@@ -245,24 +249,62 @@ public sealed class RemoteSessionService : IRemoteSessionService
         return ex.Message;
     }
 
-    /// <summary>Drains input-event messages from the relay. Phase 2 is view-only, so these are
-    /// currently ignored beyond keeping the socket's receive buffer clear; Phase 3 feeds them
-    /// to a RemoteInputInjector instead.</summary>
-    private async Task ReceiveLoopAsync(ClientWebSocket ws, string sessionId, CancellationToken ct)
+    /// <summary>Reads input events from the relay and injects them on this machine, until the
+    /// session ends. Anything unparseable is dropped — see RemoteInputEvent.TryParse. Whatever
+    /// ends the loop, every key and button still held is released on the way out.</summary>
+    private async Task ReceiveLoopAsync(ClientWebSocket ws, string sessionId, CancellationTokenSource sessionCts)
     {
+        var ct = sessionCts.Token;
         var buffer = new byte[4096];
+        var message = new List<byte>(4096);   // reassembles a message split across frames
         try
         {
             while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
             {
                 var result = await ws.ReceiveAsync(buffer.AsMemory(), ct);
                 if (result.MessageType == WebSocketMessageType.Close) break;
+                if (result.MessageType != WebSocketMessageType.Text)
+                {
+                    message.Clear();   // the viewer never sends binary; ignore it entirely
+                    continue;
+                }
+
+                message.AddRange(buffer.AsSpan(0, result.Count));
+                if (!result.EndOfMessage)
+                {
+                    // Input events are tiny, so this only happens if something upstream is
+                    // misbehaving. Cap it rather than letting a peer grow this list forever.
+                    if (message.Count > 64 * 1024) message.Clear();
+                    continue;
+                }
+
+                var text = System.Text.Encoding.UTF8.GetString(message.ToArray());
+                message.Clear();
+
+                if (!RemoteInputEvent.TryParse(text, out var evt))
+                {
+                    _log.LogDebug("remote-session {Id}: ignoring unrecognized input message", sessionId);
+                    continue;
+                }
+                if (evt.Kind == RemoteInputKind.End)
+                {
+                    _log.LogInformation("remote-session {Id}: operator ended the session", sessionId);
+                    SafeCancel(sessionCts);
+                    break;
+                }
+                _input.Inject(evt);
             }
         }
         catch (OperationCanceledException) { /* session ending */ }
         catch (Exception ex)
         {
             _log.LogDebug(ex, "remote-session {Id}: receive loop ended", sessionId);
+        }
+        finally
+        {
+            // The session can end mid-gesture — banner clicked, relay dropped, hard timeout.
+            // Anything still pressed has to be let go, or it stays stuck down on the desktop.
+            _input.ReleaseAll();
         }
     }
 }

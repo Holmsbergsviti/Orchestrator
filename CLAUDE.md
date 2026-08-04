@@ -101,6 +101,11 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   pin a self-signed cert by SHA-1 thumbprint (`RelayCertThumbprint`); the console prints it at startup.
 - Failures must stay visible on both ends: the target's `SessionBanner` shows the reason, and
   `RelayHub` sends the viewer JSON status text messages (frames are binary, so they never collide).
+- Input flows browser→agent as JSON **text** on the same socket (`RemoteInputEvent` parses it,
+  `RemoteInputInjector` injects via `SendInput`). Mouse positions are fractions of the virtual
+  desktop, never pixels — the capture is downscaled and may span monitors. Parsing is
+  deliberately strict (it becomes real keystrokes), and every held key/button is released when
+  a session ends, or it stays stuck down on that desktop.
 
 ## Console specifics
 

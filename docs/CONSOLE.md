@@ -98,7 +98,16 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   - Sessions end at `RemoteSessionMaxMinutes` (default 30) whatever the console is doing.
   - Pending sessions live in the console's memory, so **restarting the console cancels them**;
     just press Remote again.
-  - Mouse and keyboard control is not wired up yet (Phase 3) — the viewer is currently view-only.
+  - Pressing Remote again on a machine that already has a session reopens **that** viewer
+    rather than starting a second one.
+  - **Mouse and keyboard drive the remote machine.** Click, drag, scroll and type on the
+    canvas and it happens over there. While **Input: on**, this tab also swallows your own
+    browser shortcuts (Ctrl+W, F5, Ctrl+T) so they go to the remote machine instead — switch
+    to **Input: off** to get your browser back without ending the session.
+  - Input can't reach an elevated window, a UAC prompt, or the lock screen. Windows blocks
+    synthetic input to those on purpose; the screen keeps streaming, clicks just do nothing.
+  - Anything still held down (a modifier, a mouse button) is released automatically when the
+    session ends, however it ends.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.
   The button enables only when you've changed something. The page reloads from GitHub after
   a successful save.

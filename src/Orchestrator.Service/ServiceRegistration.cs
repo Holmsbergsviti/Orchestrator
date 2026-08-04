@@ -50,6 +50,7 @@ public static class ServiceRegistration
         builder.Services.AddSingleton<IProgramLauncher, ProgramLauncher>();
         builder.Services.AddSingleton<IScreenCaptureService, ScreenCaptureService>();
         builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
+        builder.Services.AddSingleton<IRemoteInputInjector, RemoteInputInjector>();
         builder.Services.AddSingleton<IRemoteSessionService, RemoteSessionService>();
     }
 
