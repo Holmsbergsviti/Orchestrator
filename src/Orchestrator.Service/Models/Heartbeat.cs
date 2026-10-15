@@ -39,6 +39,13 @@ public sealed class Heartbeat
     [JsonPropertyName("syncIntervalMinutes")]
     public int SyncIntervalMinutes { get; set; }                // how often this machine syncs (helps judge "is it overdue")
 
+    /// <summary>The longest this machine goes without pushing a heartbeat when nothing changes.
+    /// "Last seen" is only refreshed this often, so anything judging "is it overdue" (the
+    /// console's online dot, the fleet-watch workflow) must allow for it, not just for
+    /// <see cref="SyncIntervalMinutes"/>.</summary>
+    [JsonPropertyName("heartbeatMaxIntervalMinutes")]
+    public int HeartbeatMaxIntervalMinutes { get; set; }
+
     [JsonPropertyName("lastSyncSuccess")]
     public bool LastSyncSuccess { get; set; }                   // did the most recent sync finish without errors?
 
@@ -67,6 +74,7 @@ public sealed class Heartbeat
             // it on the old build until something unrelated changed.
             MachineId, Hostname, Os, AgentVersion, AgentSha256,
             SyncIntervalMinutes.ToString(),
+            HeartbeatMaxIntervalMinutes.ToString(),
             LastSyncSuccess.ToString(),
             ManifestVersion ?? "",
             string.Join(',', AppliedProgramIds),

@@ -96,6 +96,9 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 if (!plan.HasWork)   // nothing to install/update/delete?
                     _log.LogInformation("Everything up to date.");
 
+                // Folders that still hold an active program's files: a delete must never remove them.
+                var inUsePaths = effective.ActivePrograms.Select(p => p.InstallPath).ToList();
+
                 foreach (var action in plan.Actions)   // carry out each planned action
                 {
                     ct.ThrowIfCancellationRequested();   // bail out promptly if the service is stopping
@@ -110,7 +113,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
                                     .Add($"{action.Program.Name} v{action.Program.Version}");                // ...installed or updated
                                 break;
                             case SyncActionType.Delete:
-                                DeleteProgram(action.Program, checksumCache);   // uninstall it
+                                DeleteProgram(action.Program, checksumCache, inUsePaths);   // uninstall it
                                 record.Deleted.Add(action.Program.Name);        // record the deletion
                                 break;
                             case SyncActionType.UpToDate:
@@ -229,7 +232,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
             MaybeRunOnceInstalled(p);   // run it now if it hasn't run on this machine yet
     }
 
-    private void DeleteProgram(ProgramEntry p, Dictionary<string, string> checksumCache)
+    private void DeleteProgram(ProgramEntry p, Dictionary<string, string> checksumCache, IEnumerable<string> inUsePaths)
     {
         _log.LogInformation("Deleting {Name}{Reason}", p.Name,
             string.IsNullOrWhiteSpace(p.Reason) ? "" : $" ({p.Reason})");   // log the name and reason (if given)
@@ -243,9 +246,30 @@ public sealed class SyncService : ISyncService   // the actual implementation
 
         if (!string.IsNullOrWhiteSpace(p.InstallPath) && Directory.Exists(p.InstallPath))   // if its folder exists...
         {
-            try { Directory.Delete(p.InstallPath, recursive: true); }   // delete the whole install folder
-            catch (Exception ex) { _log.LogWarning(ex, "Could not delete {Path}", p.InstallPath); }   // warn if we can't
-            _log.LogInformation("Removed {Path}", p.InstallPath);
+            // The path comes from the manifest and we run as SYSTEM: refuse to recurse into a
+            // folder that isn't plainly this program's own (system folders, shared folders...).
+            var unsafeReason = InstallPathGuard.WhyUnsafeToDelete(p.InstallPath, _config.RootPath, inUsePaths);
+            if (unsafeReason is null)
+            {
+                try
+                {
+                    Directory.Delete(p.InstallPath, recursive: true);   // delete the whole install folder
+                    _log.LogInformation("Removed {Path}", p.InstallPath);
+                }
+                catch (Exception ex) { _log.LogWarning(ex, "Could not delete {Path}", p.InstallPath); }   // warn if we can't
+            }
+            else
+            {
+                _log.LogWarning("Not deleting folder {Path} for {Name}: {Reason}. Only the program's own file is removed.",
+                    p.InstallPath, p.Name, unsafeReason);
+                // Remove just the file we installed — and only if we did install it here
+                // (a remembered fingerprint is our proof), so we never delete a file we didn't write.
+                if (checksumCache.ContainsKey(p.Id) && File.Exists(p.FullFilePath))
+                {
+                    try { File.Delete(p.FullFilePath); _log.LogInformation("Removed {File}", p.FullFilePath); }
+                    catch (Exception ex) { _log.LogWarning(ex, "Could not delete {File}", p.FullFilePath); }
+                }
+            }
         }
 
         checksumCache.Remove(p.Id);   // forget its remembered fingerprint
@@ -319,7 +343,11 @@ public sealed class SyncService : ISyncService   // the actual implementation
             machine.CompletedCommands.Add(cmd.Id);
             Trim(machine.CompletedCommands, 100);
             _configService.SaveMachineConfig(machine);
-            ExecuteCommand(cmd);
+            if (OneShotExpiry.IsExpired(cmd.ExpiresUtc, cmd.RequestedUtc, OneShotExpiry.CommandMaxAge, DateTimeOffset.UtcNow))
+                _log.LogWarning("Skipping {Action} command (id {Id}): requested {Requested}, too old to act on now",
+                    cmd.Action, cmd.Id, cmd.RequestedUtc ?? "?");   // consumed, never run
+            else
+                ExecuteCommand(cmd);
         }
 
         // A pending screenshot capture request for this machine. The service itself has no
@@ -333,7 +361,11 @@ public sealed class SyncService : ISyncService   // the actual implementation
             machine.CompletedScreenshots.Add(shot.Id);
             Trim(machine.CompletedScreenshots, 100);
             _configService.SaveMachineConfig(machine);
-            _scheduledTasks.RunInteractiveScreenshotOnce(shot.Id);
+            if (OneShotExpiry.IsExpired(shot.ExpiresUtc, shot.RequestedUtc, OneShotExpiry.InteractiveMaxAge, DateTimeOffset.UtcNow))
+                _log.LogWarning("Skipping screenshot request {Id}: requested {Requested}, too old to act on now",
+                    shot.Id, shot.RequestedUtc ?? "?");
+            else
+                _scheduledTasks.RunInteractiveScreenshotOnce(shot.Id);
         }
 
         // A pending live remote-control session request for this machine. Same schedule-into-
@@ -367,17 +399,24 @@ public sealed class SyncService : ISyncService   // the actual implementation
         // Wake-on-LAN requests are sent by the designated always-on waker (targets are powered off).
         if (_config.IsWaker && file.Wake.Count > 0)
         {
-            var sentAny = false;
+            var changed = false;   // did the completed-wakes list grow?
             foreach (var wr in file.Wake)
             {
                 if (string.IsNullOrEmpty(wr.Id) || machine.CompletedWakes.Contains(wr.Id)) continue;
+                if (OneShotExpiry.IsExpired(wr.ExpiresUtc, wr.RequestedUtc, OneShotExpiry.InteractiveMaxAge, DateTimeOffset.UtcNow))
+                {
+                    machine.CompletedWakes.Add(wr.Id);   // consume it so it isn't re-checked every cycle
+                    changed = true;                      // (persist the list below)
+                    _log.LogInformation("Skipping wake request {Id} for {Machine}: too old to act on now", wr.Id, wr.MachineId ?? wr.Mac);
+                    continue;
+                }
                 if (WakeSender.SendMagicPacket(wr.Mac, _log))
                 {
                     machine.CompletedWakes.Add(wr.Id);
-                    sentAny = true;
+                    changed = true;
                 }
             }
-            if (sentAny)
+            if (changed)
             {
                 Trim(machine.CompletedWakes, 1000);
                 _configService.SaveMachineConfig(machine);

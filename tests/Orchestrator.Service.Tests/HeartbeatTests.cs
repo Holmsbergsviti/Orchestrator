@@ -33,6 +33,15 @@ public sealed class HeartbeatTests
     // ---- Signature ---------------------------------------------------------------------
 
     [Fact]
+    public void Signature_ChangesWithHeartbeatCadence()
+    {
+        var a = Sample("2026-07-24T10:00:00Z", "p1");
+        var b = Sample("2026-07-24T10:00:00Z", "p1");
+        b.HeartbeatMaxIntervalMinutes = 30;   // readers judge "overdue" by this, so they must learn of a change
+        Assert.NotEqual(a.Signature, b.Signature);
+    }
+
+    [Fact]
     public void Signature_IgnoresTimestamp()
     {
         var a = Sample("2026-07-24T10:00:00Z", "p1");

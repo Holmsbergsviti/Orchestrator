@@ -92,6 +92,7 @@ public sealed class FleetReporter : IFleetReporter
                 AgentSha256 = AgentSha256.Value,
                 LastSeenUtc = DateTimeOffset.UtcNow.ToString("O"),
                 SyncIntervalMinutes = _config.SyncIntervalMinutes,
+                HeartbeatMaxIntervalMinutes = Math.Max(1, _config.HeartbeatMaxIntervalMinutes),   // so readers know how stale "last seen" may legitimately be
                 LastSyncSuccess = record.Success,
                 ManifestVersion = record.ManifestVersion,
                 AppliedProgramIds = applied,
@@ -100,7 +101,7 @@ public sealed class FleetReporter : IFleetReporter
             };
 
             var last = LoadLastHeartbeat();   // the last one we committed (if any)
-            if (!ShouldPush(current, last, TimeSpan.FromMinutes(Math.Max(1, _config.HeartbeatMaxIntervalMinutes)), DateTimeOffset.UtcNow))
+            if (!ShouldPush(current, last, TimeSpan.FromMinutes(current.HeartbeatMaxIntervalMinutes), DateTimeOffset.UtcNow))
             {
                 _log.LogDebug("Heartbeat unchanged — skipping commit");
                 return;

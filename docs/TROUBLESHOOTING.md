@@ -57,6 +57,12 @@ Startup registration depends on `runAsAdmin`:
   sync it once. (Removing the entry outright also uninstalls, using the last-known local
   `installPath`, but leaves no `reason` in the logs.)
 - Deletion keys off `installPath`; make sure it matches what was installed.
+- `Not deleting folder ... : <reason>` in the log means the agent refused to delete the whole
+  `installPath` because it isn't plainly the program's own folder: a drive root, a Windows,
+  Program Files, ProgramData or user-profile folder (or a parent of one), the agent's own
+  folder, or a folder another active program on that machine still uses. It removes only the
+  program's own file instead. Give each program its own folder (the console's default,
+  `C:\Windows\Orch\programs\<name>`, always qualifies).
 - Cleanup removes both startup mechanisms (Run value and Scheduled Task), so a program that
   had `runAsAdmin` toggled still gets fully unregistered.
 

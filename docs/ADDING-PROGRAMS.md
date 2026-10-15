@@ -94,7 +94,7 @@ By default every program installs on **every** machine. Add a `target` to scope 
 | `type` | active | `exe` `batch` `powershell` `vbs` `python`. |
 | `path` / `url` | active | One required. `path` preferred. |
 | `checksum` | recommended | `sha256:<64hex>`. Omitted = installs unverified (logged warn). |
-| `installPath` | active | Local dir; also used to locate files for deletion. |
+| `installPath` | active | Local dir; deleted recursively on uninstall, so give each program its own folder. System, profile and shared folders are never deleted (only the program's file is). |
 | `fileName` | active | File name written into `installPath`. |
 | `arguments` | no | Appended to the startup command. |
 | `runAtStartup` | no | Registers the program to launch at startup (mechanism depends on `runAsAdmin`). |
