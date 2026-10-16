@@ -203,6 +203,7 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("agentSha256")] public string? AgentSha256 { get; set; }
     [JsonPropertyName("lastSeenUtc")] public string? LastSeenUtc { get; set; }
     [JsonPropertyName("syncIntervalMinutes")] public int SyncIntervalMinutes { get; set; }
+    [JsonPropertyName("heartbeatMaxIntervalMinutes")] public int HeartbeatMaxIntervalMinutes { get; set; }   // 0 = older agent
     [JsonPropertyName("lastSyncSuccess")] public bool LastSyncSuccess { get; set; }
     [JsonPropertyName("manifestVersion")] public string? ManifestVersion { get; set; }
     [JsonPropertyName("appliedProgramIds")] public List<string> AppliedProgramIds { get; set; } = new();
@@ -220,6 +221,15 @@ public sealed class ControlRepo
 
     /// <summary>How long a queued remote-control session stays valid for the agent to notice it.</summary>
     private static readonly TimeSpan PickupWindow = TimeSpan.FromMinutes(10);
+
+    // How long the other one-shot requests stay valid. The agent skips (and consumes) any
+    // request it first sees after its expiresUtc, so a machine that comes back days later,
+    // or is reinstalled and has forgotten which ids it already ran, doesn't act on it.
+    // A restart/shutdown is still wanted when a machine that was briefly offline returns;
+    // a screenshot or wake is only useful while the operator is waiting for it.
+    private static readonly TimeSpan CommandValidFor = TimeSpan.FromHours(24);
+    private static readonly TimeSpan ScreenshotValidFor = TimeSpan.FromHours(1);
+    private static readonly TimeSpan WakeValidFor = TimeSpan.FromHours(1);
     /// <summary>Extra time the relay waits beyond that, for an agent that HAS picked the request
     /// up to finish connecting.</summary>
     private static readonly TimeSpan ConnectGrace = TimeSpan.FromMinutes(2);
@@ -529,7 +539,8 @@ public sealed class ControlRepo
         {
             ["action"] = action,
             ["id"] = Guid.NewGuid().ToString("N"),   // fresh nonce = run once on the target
-            ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+            ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+            ["expiresUtc"] = DateTimeOffset.UtcNow.Add(CommandValidFor).ToString("O")   // stale after this
         };
         File.WriteAllText(full, root.ToJsonString(JsonWrite));
 
@@ -571,7 +582,8 @@ public sealed class ControlRepo
                 ["mac"] = mac,
                 ["machineId"] = id,
                 ["id"] = Guid.NewGuid().ToString("N"),
-                ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+                ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+                ["expiresUtc"] = DateTimeOffset.UtcNow.Add(WakeValidFor).ToString("O")   // a new waker won't replay it
             });
         }
         if (wake.Count == 0)
@@ -609,7 +621,8 @@ public sealed class ControlRepo
         shots[machineId] = new JsonObject
         {
             ["id"] = Guid.NewGuid().ToString("N"),   // fresh nonce = capture once on the target
-            ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O")
+            ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O"),
+            ["expiresUtc"] = DateTimeOffset.UtcNow.Add(ScreenshotValidFor).ToString("O")   // stale after this
         };
         File.WriteAllText(full, root.ToJsonString(JsonWrite));
 
@@ -918,11 +931,20 @@ public sealed class ControlRepo
         catch { return null; }   // malformed pointer -> treat as "no screenshot yet"
     }
 
-    /// <summary>A machine is "online" if its last heartbeat is within ~2 sync intervals.</summary>
+    /// <summary>Heartbeat cadence assumed for agents that don't report it (their old built-in default).</summary>
+    private const int LegacyHeartbeatMaxIntervalMinutes = 360;
+
+    /// <summary>
+    /// A machine is "online" if its last heartbeat is no older than it could legitimately be.
+    /// An agent with nothing new to say pushes only every heartbeatMaxIntervalMinutes, so
+    /// judging by the sync interval alone showed every idle, healthy machine as offline.
+    /// </summary>
     private static bool IsOnline(HeartbeatFile hb)
     {
         if (!DateTimeOffset.TryParse(hb.LastSeenUtc, out var seen)) return false;
         var interval = Math.Max(1, hb.SyncIntervalMinutes);
-        return DateTimeOffset.UtcNow - seen <= TimeSpan.FromMinutes(2 * interval + 2);
+        var refresh = hb.HeartbeatMaxIntervalMinutes > 0 ? hb.HeartbeatMaxIntervalMinutes : LegacyHeartbeatMaxIntervalMinutes;
+        // The forced refresh fires on the first sync after it's due, so allow one more interval, plus slack.
+        return DateTimeOffset.UtcNow - seen <= TimeSpan.FromMinutes(Math.Max(refresh, interval) + 2 * interval + 2);
     }
 }

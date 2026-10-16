@@ -133,7 +133,7 @@ The per-machine `appsettings.json` written at install time still wins at runtime
 | `RegistryEntryPrefix` | Namespaces Run entries | `Orch_` |
 | `ReportState` | Commit a heartbeat to `fleet-state` (needs a writable token) | `true` |
 | `FleetStateBranch` | Branch heartbeats are committed to | `fleet-state` |
-| `HeartbeatMaxIntervalMinutes` | Force a heartbeat at least this often | `360` |
+| `HeartbeatMaxIntervalMinutes` | Force a heartbeat at least this often (also how long an idle machine still counts as online) | `30` |
 
 ## Uninstall
 ```powershell

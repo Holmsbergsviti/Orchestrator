@@ -74,11 +74,14 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 - **Shut down / Restart** (Machines table, Power column) — sends a one-off power command to a
   machine. The agent runs it forced (`/f`) on its next sync, after a 5-second warning. Written
   to `commands.json` with a nonce so it runs exactly once and never loops after reboot.
+  It expires after 24 hours: a machine that first sees it later (it was off for days, or was
+  reinstalled and forgot what it already ran) skips it instead of rebooting out of the blue.
 - **Wake / Wake all** (Machines table) — Wake-on-LAN. The agent can't power a machine on (it's
   off), so a designated **waker** does it: install one always-on machine per network segment
   with `-IsWaker` (or `"IsWaker": true` in its appsettings), enable WoL in each target's
   BIOS/NIC, and the waker broadcasts magic packets to the targets' MACs (reported in their
-  heartbeats). Machines with no reported MAC yet are skipped.
+  heartbeats). Machines with no reported MAC yet are skipped. Wake and screenshot requests
+  expire after an hour, so a newly installed waker doesn't replay old ones.
 - **Screenshot** (Machines table, Power column) — requests a screen capture on that machine's
   next sync. Written to `commands.json` with a nonce, same one-shot pattern as shutdown/restart.
   The service itself runs in Windows session 0 (no desktop), so it only schedules the actual

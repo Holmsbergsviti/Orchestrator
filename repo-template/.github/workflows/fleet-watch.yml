@@ -65,10 +65,12 @@ jobs:
                   continue
 
               age_min = (now - seen).total_seconds() / 60
-              # Judge each machine against ITS OWN interval: a box that syncs hourly isn't late
-              # at 40 minutes, and one that syncs every minute is very late indeed.
+              # Judge each machine against ITS OWN cadence. An agent with nothing new to report
+              # only refreshes lastSeenUtc every heartbeatMaxIntervalMinutes (agents too old to
+              # report it used 360), so a quiet, healthy machine can legitimately look that old.
               interval = max(1, int(hb.get("syncIntervalMinutes") or 60))
-              limit = max(3 * interval, 30)
+              refresh = max(1, int(hb.get("heartbeatMaxIntervalMinutes") or 360))
+              limit = max(refresh + 3 * interval, 30)
               (stale if age_min > limit else healthy).append((name, f"last seen {int(age_min)} min ago (expected within {int(limit)})", age_min))
 
           print(f"{len(stale)} machine(s) overdue, {len(healthy)} reporting normally.\n")

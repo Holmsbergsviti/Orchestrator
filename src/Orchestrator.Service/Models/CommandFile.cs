@@ -7,6 +7,7 @@
 //   doesn't loop every time the machine comes back up or re-syncs.
 // =====================================================================================
 
+using System.Globalization;              // for culture-independent timestamp parsing
 using System.Text.Json.Serialization;   // for [JsonPropertyName]
 
 namespace Orchestrator.Service.Models;
@@ -50,6 +51,7 @@ public sealed class ScreenshotRequest
 {
     [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;     // nonce (captured once per request)
     [JsonPropertyName("requestedUtc")] public string? RequestedUtc { get; set; }
+    [JsonPropertyName("expiresUtc")] public string? ExpiresUtc { get; set; }    // skipped if first seen after this
 }
 
 /// <summary>One Wake-on-LAN request: send a magic packet to this MAC.</summary>
@@ -59,6 +61,7 @@ public sealed class WakeRequest
     [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;     // nonce (sent once per waker)
     [JsonPropertyName("machineId")] public string? MachineId { get; set; }      // for logging/traceability
     [JsonPropertyName("requestedUtc")] public string? RequestedUtc { get; set; }
+    [JsonPropertyName("expiresUtc")] public string? ExpiresUtc { get; set; }    // skipped if first seen after this
 }
 
 /// <summary>A single pending admin command for one machine.</summary>
@@ -74,4 +77,40 @@ public sealed class MachineCommand
 
     [JsonPropertyName("requestedUtc")]
     public string? RequestedUtc { get; set; }
+
+    /// <summary>If the agent first sees this command after this time, it is consumed without running.</summary>
+    [JsonPropertyName("expiresUtc")]
+    public string? ExpiresUtc { get; set; }
+}
+
+/// <summary>
+/// Decides whether a one-shot request is too old to act on. Each machine remembers the ids it
+/// already ran only in its local config.json, so without an expiry a reinstalled machine (or a
+/// newly added waker) would replay every request still sitting in commands.json — a restart
+/// from months ago included.
+/// </summary>
+public static class OneShotExpiry
+{
+    /// <summary>Restart/shutdown: still wanted when a briefly-offline machine comes back.</summary>
+    public static readonly TimeSpan CommandMaxAge = TimeSpan.FromHours(24);
+
+    /// <summary>Screenshot / wake: only useful while the operator is waiting.</summary>
+    public static readonly TimeSpan InteractiveMaxAge = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// True when the request has expired. Uses expiresUtc when present; for requests written by
+    /// an older console (no expiresUtc) falls back to requestedUtc + <paramref name="maxAge"/>.
+    /// A request carrying neither date is treated as current (the old behaviour).
+    /// </summary>
+    public static bool IsExpired(string? expiresUtc, string? requestedUtc, TimeSpan maxAge, DateTimeOffset nowUtc)
+    {
+        if (TryParseUtc(expiresUtc, out var expires)) return nowUtc > expires;
+        if (TryParseUtc(requestedUtc, out var requested)) return nowUtc > requested + maxAge;
+        return false;
+    }
+
+    // Culture-independent, and a timestamp with no offset is read as UTC (the console always writes "O" format).
+    private static bool TryParseUtc(string? s, out DateTimeOffset value)
+        => DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out value);
 }

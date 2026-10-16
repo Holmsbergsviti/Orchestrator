@@ -11,7 +11,7 @@
   "defaultBranch": "main",
   "defaultSyncIntervalMinutes": 3,
   "fleetStateBranch": "fleet-state",
-  "heartbeatMaxIntervalMinutes": 360,
+  "heartbeatMaxIntervalMinutes": 30,
   "codeRepo": "Holmsbergsviti/Orchestrator",
   "codeRef": "main"
 }
