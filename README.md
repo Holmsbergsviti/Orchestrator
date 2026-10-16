@@ -1,8 +1,3 @@
-<!--
-  FILE PURPOSE (in plain terms): The front-page introduction to the whole project.
-  It explains what the Orchestrator does, how the two-repo design works, how to build
-  and install it, and how a sync cycle works. Start here if you're new to the repo.
--->
 # GitHub-Based Windows Orchestrator
 
 A lightweight Windows service that syncs programs (`.exe`, `.bat`, `.ps1`, `.vbs`, `.py`)
@@ -18,6 +13,12 @@ specific machines** to control each PC individually.
 - **Self-contained** — publishes to a single `.exe`, no .NET runtime needed on targets.
 - **Verified** — every download checked against a SHA256 in the manifest.
 - **Silent** — runs as a SYSTEM Windows Service, no UI.
+- **Self-updating** — agents converge on the published build by hash and swap themselves via a
+  one-shot SYSTEM scheduled task.
+- **Fleet commands** — shutdown / restart / Wake-on-LAN / screenshot, each written once with a
+  nonce so it runs exactly once.
+- **Live remote control** — optional, consent-visible screen + input session over a WebSocket
+  relay, with a mandatory on-screen banner and an audit log on the target.
 
 ## Repository layout
 
@@ -105,6 +106,31 @@ cd src/Orchestrator.Console && dotnet run -- /path/to/control-repo
 Heartbeats and the console need the agent token to have **write** access. With a read-only
 token, set `ReportState: false` — the agent logs one warning and keeps syncing normally.
 
+## Fleet commands & remote control
+
+The console writes one-shot commands to `commands.json` on `main`, each tagged with a nonce so an
+agent runs it exactly once and never loops after a reboot:
+
+- **Shutdown / restart** — executed on the agent's next sync.
+- **Wake / Wake all** — Wake-on-LAN. A designated always-on **waker** machine per network segment
+  broadcasts magic packets to the MAC addresses the targets reported in their heartbeats.
+- **Screenshot** — the agent captures the signed-in user's screen and uploads it to the
+  `fleet-state` branch.
+- **Remote** — a live remote-control session: the agent opens an *outbound* WebSocket to the
+  console's relay, streams frames out and injects the operator's mouse/keyboard events in.
+  A red **"Remote control active — click to end"** banner is always shown on the target and cannot
+  be disabled; sessions are time-boxed (`RemoteSessionMaxMinutes`, default 30) and every session is
+  recorded in `logs\remote-sessions.json` on the machine. Details in [docs/CONSOLE.md](docs/CONSOLE.md).
+
+## Agent self-update
+
+Each sync the agent reads `agent.json` from the control repo and compares the published build's
+SHA256 with the hash of the exe it is **actually running** — not a self-reported version string, so
+rolled-back or half-updated machines still converge. A mismatching download is treated as hostile,
+not retried. Because a running service cannot overwrite itself, the swap is handed to `install.ps1`
+through a one-time SYSTEM scheduled task that stops the service, replaces the binary and restarts it.
+The `Publish agent` workflow builds, tests and publishes the win-x64 binary and records the release.
+
 ## Changing names & paths — `defaults.json`
 
 The fixed names and paths (install root, service name, exe name, registry key/prefix,
@@ -148,6 +174,17 @@ The per-machine `appsettings.json` written at install time still wins at runtime
   before the console can target it individually (write token + `ReportState: true`).
 - Rollback = revert the manifest commit; the next sync converges to it.
 - The console needs `git` on your PATH and a local clone whose `push` is already authenticated.
+
+## Development & tests
+
+```bash
+dotnet build Orchestrator.sln     # agent + console, warnings treated as errors
+dotnet test                       # xUnit suite (manifest diffing, targeting, checksums, heartbeats, ...)
+```
+
+The service targets `net8.0-windows` but compiles and unit-tests on macOS/Linux; only the Windows
+runtime paths (registry, WMI, scheduled tasks, process launch) need a Windows machine. The install
+scripts are covered by Pester tests in CI (`.github/workflows/test-scripts.yml`).
 
 ## Requirements
 - Targets: Windows 10/11 or Server 2016+ (Win7 SP1+ in theory).
