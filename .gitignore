@@ -41,3 +41,4 @@ logs/
 appsettings.Local.json
 # any environment-specific local overrides
 appsettings.*.Local.json
+.DS_Store
