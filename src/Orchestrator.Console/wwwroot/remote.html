@@ -168,7 +168,7 @@
 
       ws.onerror = () => { if (opened) statusEl.textContent = 'Connection error'; };
 
-      ws.onmessage = async (ev) => {
+      ws.onmessage = (ev) => {
         // Text = a control message (relay status, or the agent's deadline); binary = a frame.
         if (typeof ev.data === 'string') {
           let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -192,21 +192,43 @@
           return;
         }
         if (!(ev.data instanceof ArrayBuffer)) return;
-        const blob = new Blob([ev.data], { type: 'image/jpeg' });
-        const bitmap = await createImageBitmap(blob);
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-        }
-        ctx.drawImage(bitmap, 0, 0);
-        bitmap.close();
-        if (canvas.hidden) {
-          if (countdown) { clearInterval(countdown); countdown = null; }
-          canvas.hidden = false;
-          waitingEl.hidden = true;
-          statusEl.textContent = 'Live';
-        }
+        // Only ever decode the NEWEST frame. Decoding is async, so starting one per message
+        // let several run at once and finish in any order — an older frame could be drawn
+        // over a newer one (visible as stutter), and a tab that couldn't keep up fell further
+        // and further behind. Now a frame that arrives mid-decode just replaces the one
+        // waiting its turn, and anything older than that is dropped unseen.
+        pendingFrame = ev.data;
+        if (!decoding) drawFrames();
       };
+
+      let pendingFrame = null;   // the latest frame not yet drawn
+      let decoding = false;      // true while drawFrames is working through pendingFrame
+      async function drawFrames() {
+        decoding = true;
+        try {
+          while (pendingFrame) {
+            const data = pendingFrame;
+            pendingFrame = null;
+            let bitmap;
+            try { bitmap = await createImageBitmap(new Blob([data], { type: 'image/jpeg' })); }
+            catch { continue; }   // one undecodable frame shouldn't stop the stream
+            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+              canvas.width = bitmap.width;
+              canvas.height = bitmap.height;
+            }
+            ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+            if (canvas.hidden) {
+              if (countdown) { clearInterval(countdown); countdown = null; }
+              canvas.hidden = false;
+              waitingEl.hidden = true;
+              statusEl.textContent = 'Live';
+            }
+          }
+        } finally {
+          decoding = false;
+        }
+      }
 
       // ---- input capture (mouse + keyboard -> the remote machine) --------------------
       // Positions go out as FRACTIONS of the canvas, never pixels: the canvas holds a
@@ -227,7 +249,7 @@
       const BUTTONS = { 0: 'left', 1: 'middle', 2: 'right' };
 
       canvas.addEventListener('mousemove', (ev) => {
-        // ~60/s is plenty for a 5 fps view and keeps one flick of the wrist from queueing
+        // ~60/s is plenty for a ~15 fps view and keeps one flick of the wrist from queueing
         // hundreds of messages behind a slow link.
         const now = performance.now();
         if (now - lastMoveSent < 16) return;

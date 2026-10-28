@@ -89,7 +89,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   signed in there. Once uploaded (to `screenshots/<machineId>/` on the `fleet-state` branch,
   alongside the heartbeats), a **View** link appears next to the button to open the latest one.
 - **Remote** (Machines table, Power column) — starts a **live remote-control session**: opens a
-  viewer tab that shows that machine's screen at roughly 5 fps. Needs one-time setup on both
+  viewer tab that shows that machine's screen at up to ~15 fps. Needs one-time setup on both
   ends first (`Console:AccessToken` + a certificate here, `Orchestrator:RelayUrl` there) —
   see [SETUP.md](SETUP.md#7-optional-live-remote-control). Requirements and behaviour:
   - The session starts on the machine's **next sync**, so the viewer waits (with a countdown)

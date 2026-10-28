@@ -18,6 +18,7 @@
 //   log file lives on a machine they may not be sitting at.
 // =====================================================================================
 
+using System.Diagnostics;             // Stopwatch (frame pacing)
 using System.Net.Sockets;             // SocketException (used to explain "couldn't reach the console")
 using System.Net.WebSockets;          // ClientWebSocket
 using System.Runtime.Versioning;      // [SupportedOSPlatform]
@@ -37,7 +38,16 @@ public interface IRemoteSessionService
 [SupportedOSPlatform("windows")]
 public sealed class RemoteSessionService : IRemoteSessionService
 {
-    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(200);   // ~5 fps
+    // The frame budget, measured from the START of one frame to the start of the next — so
+    // capture, encode and send all count against it rather than being added on top of a fixed
+    // sleep (which is how a "5 fps" delay used to deliver ~2). A slow link simply stretches a
+    // frame past its budget and the loop goes straight on to the next one: each send waits for
+    // the previous to finish, so frames never queue up behind the network and the picture
+    // never falls behind the real screen.
+    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(66);    // ~15 fps
+    // An unchanged screen isn't re-sent, but one frame goes out at least this often anyway so
+    // a viewer never sits on a picture that's wrong for some reason we didn't think of.
+    private static readonly TimeSpan UnchangedResend = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ConnectRetryDelay = TimeSpan.FromSeconds(5);      // between connect attempts
     private static readonly TimeSpan ErrorDisplay = TimeSpan.FromSeconds(20);          // how long a failure stays on screen
     private const int ConnectAttempts = 3;   // the console may be restarting right as the task fires
@@ -228,10 +238,13 @@ public sealed class RemoteSessionService : IRemoteSessionService
 
             var receiveTask = ReceiveLoopAsync(ws, sessionId, banner, sessionCts);
             var nextDeadlineBroadcast = DateTimeOffset.MinValue;
+            byte[]? lastSent = null;                 // the last frame the viewer received
+            var lastSentAt = DateTimeOffset.MinValue;
             try
             {
                 while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
                 {
+                    var frameStarted = Stopwatch.GetTimestamp();
                     // The deadline goes out from THIS loop and nowhere else. A WebSocket tolerates
                     // one concurrent writer, and the frame loop is it — the receive loop only ever
                     // updates the deadline and flags it, never writes to the socket itself.
@@ -245,8 +258,19 @@ public sealed class RemoteSessionService : IRemoteSessionService
                         catch (Exception ex) { _log.LogDebug(ex, "remote-session {Id}: deadline broadcast failed", sessionId); break; }
                     }
 
-                    var jpeg = _capture.CaptureJpeg();
-                    if (jpeg is not null)
+                    var jpeg = _capture.CaptureFrame();
+                    // JPEG encoding is deterministic, so identical bytes mean an identical
+                    // screen. Skipping those keeps an idle desktop from saturating the link for
+                    // nothing — and leaves that bandwidth free for when the screen does move.
+                    var unchanged = jpeg is not null && lastSent is not null
+                        && jpeg.AsSpan().SequenceEqual(lastSent) && now - lastSentAt < UnchangedResend;
+                    if (jpeg is null)
+                    {
+                        // A null capture means no desktop to grab right now (locked workstation,
+                        // RDP disconnect, secure desktop). Keep the session up — it usually comes back.
+                        _log.LogDebug("remote-session {Id}: screen capture unavailable this frame", sessionId);
+                    }
+                    else if (!unchanged)
                     {
                         try
                         {
@@ -254,6 +278,8 @@ public sealed class RemoteSessionService : IRemoteSessionService
                             // unambiguously — WebSocket exposes both an ArraySegment<byte> and a
                             // Memory<byte> overload, and byte[] converts implicitly to either.
                             await ws.SendAsync(jpeg.AsMemory(), WebSocketMessageType.Binary, endOfMessage: true, ct);
+                            lastSent = jpeg;
+                            lastSentAt = now;
                         }
                         catch (Exception ex)
                         {
@@ -261,13 +287,10 @@ public sealed class RemoteSessionService : IRemoteSessionService
                             break;
                         }
                     }
-                    else
-                    {
-                        // A null capture means no desktop to grab right now (locked workstation,
-                        // RDP disconnect, secure desktop). Keep the session up — it usually comes back.
-                        _log.LogDebug("remote-session {Id}: screen capture unavailable this frame", sessionId);
-                    }
-                    try { await Task.Delay(FrameInterval, ct); }
+                    // Sleep only for whatever is left of this frame's budget (see FrameInterval).
+                    var remaining = FrameInterval - Stopwatch.GetElapsedTime(frameStarted);
+                    if (remaining <= TimeSpan.Zero) continue;
+                    try { await Task.Delay(remaining, ct); }
                     catch (OperationCanceledException) { break; }
                 }
             }
