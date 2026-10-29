@@ -13,6 +13,13 @@ namespace Orchestrator.Console;
 /// <summary>Raised when a git command exits non-zero; carries stderr for the UI.</summary>
 public sealed class GitException(string message) : Exception(message);
 
+/// <summary>The push step failed after a local commit was made — usually because GitHub moved
+/// on while we were editing (CI publishes agent.json to the same repo on every agent build).
+/// <see cref="GitRepo.CommitAndPushAsync"/> has already undone the local commit when this is
+/// thrown, so retrying from scratch is safe. A separate type from the generic GitException so
+/// callers can retry exactly this case and nothing else.</summary>
+public sealed class PushRejectedException(string message) : Exception(message);
+
 /// <summary>Runs git commands against a single local repository directory.</summary>
 public sealed class GitRepo(string repoPath)
 {
@@ -82,14 +89,43 @@ public sealed class GitRepo(string repoPath)
         await RunAsync(ct, "merge", "--ff-only", $"{remote}/{branch}");
     }
 
-    /// <summary>Stage the given paths, commit, and push. Returns the new commit's short SHA.</summary>
+    /// <summary>The full SHA HEAD points at now.</summary>
+    public async Task<string> HeadAsync(CancellationToken ct) => (await RunAsync(ct, "rev-parse", "HEAD")).Trim();
+
+    /// <summary>Put the working tree back exactly as it was at <paramref name="sha"/>: drops any
+    /// commit made since, restores edited files, and deletes the given paths if they were newly
+    /// created (e.g. a program file copied in, or a fresh .sig). Only safe because every console
+    /// save starts from a clean tree.</summary>
+    public async Task RollbackAsync(string sha, IEnumerable<string> paths)
+    {
+        await RunAsync(CancellationToken.None, "reset", "--hard", sha);
+        foreach (var p in paths)
+            TryRun(out _, out _, "clean", "-fdq", "--", p);   // best effort: a path that never existed is fine
+    }
+
+    /// <summary>Stage the given paths, commit, and push. Returns the new commit's short SHA.
+    /// If ANY step fails, the clone is put back exactly as it was before: a commit that never
+    /// reached GitHub would otherwise sit on local main, and every later save would then be
+    /// refused as "diverged" until someone repaired the clone by hand. A failed push is
+    /// reported as <see cref="PushRejectedException"/> so the caller can retry once.</summary>
     public async Task<string> CommitAndPushAsync(string remote, string branch, string message, IEnumerable<string> paths, CancellationToken ct)
     {
-        foreach (var p in paths) await RunAsync(ct, "add", "--", p);
-        await RunAsync(ct, "commit", "-m", message);
-        var sha = (await RunAsync(ct, "rev-parse", "--short", "HEAD")).Trim();
-        await RunAsync(ct, "push", remote, branch);
-        return sha;
+        var all = paths.ToList();
+        var start = await HeadAsync(ct);
+        try
+        {
+            foreach (var p in all) await RunAsync(ct, "add", "--", p);
+            await RunAsync(ct, "commit", "-m", message);
+            var sha = (await RunAsync(ct, "rev-parse", "--short", "HEAD")).Trim();
+            try { await RunAsync(ct, "push", remote, branch); }
+            catch (GitException ex) { throw new PushRejectedException(ex.Message); }
+            return sha;
+        }
+        catch (Exception)
+        {
+            await RollbackAsync(start, all);
+            throw;
+        }
     }
 
     // ---- process plumbing --------------------------------------------------------------

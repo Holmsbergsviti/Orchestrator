@@ -158,6 +158,11 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
   only the intended fields change and everything else round-trips untouched.
 - Targeting is written as **hostnames** (readable), translated from the stable machine ids the UI tracks.
 - Saves refuse a **dirty or diverged** clone (fast-forward-only) to avoid clobbering; surfaced as a UI error.
+- A save that fails at any step is **rolled back** (`GitRepo.CommitAndPushAsync` resets to the pre-edit HEAD and
+  removes files it created). Otherwise a rejected push left a commit stranded on local main and every later save was
+  refused as diverged — easy to hit, because CI pushes `agent.json` to the control repo on every agent build. A
+  rejected push (`PushRejectedException`) is retried once from a fresh fetch, and all writes run under one gate
+  (`ControlRepo.MutateAsync`). New write operations must go through `MutateAsync` and `CommitSignedAsync`.
 
 ## Conventions
 
