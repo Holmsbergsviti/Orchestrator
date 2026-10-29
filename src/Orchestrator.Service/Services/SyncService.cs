@@ -32,6 +32,8 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly IScheduledTaskService _scheduledTasks;  // schedules interactive one-time runs (run-now, screenshot capture)
     private readonly ISelfUpdateService _selfUpdate;    // keeps the agent's own binary current
     private readonly IConfigService _configService;     // config + machine state
+    /// <summary>When this run of the service (or verb) started; see <see cref="UninstallAgentAsync"/>.</summary>
+    private static readonly DateTimeOffset ServiceStartedUtc = DateTimeOffset.UtcNow;
     private bool _uninstalling;                          // set once an uninstall is scheduled: stop reporting and updating
     private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
     private readonly IRelayIdentity _relayIdentity;     // signs remote sessions so the relay knows it's really us
@@ -479,6 +481,15 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private async Task UninstallAgentAsync(MachineCommand cmd, MachineConfig machine, CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows()) return;
+        // Only a command made while THIS run of the service was up counts. Otherwise a machine installed
+        // again soon after the operator pressed Uninstall (same folder, so same machine id) would find the
+        // old command waiting and remove its brand-new agent.
+        if (OneShotExpiry.RequestedBefore(cmd.RequestedUtc, ServiceStartedUtc))
+        {
+            _log.LogWarning("Ignoring uninstall command {Id} requested {Requested}: it predates this service's start ({Started:u}). " +
+                            "If you meant it, press Uninstall in the console again.", cmd.Id, cmd.RequestedUtc ?? "?", ServiceStartedUtc);
+            return;
+        }
         string? script = null;
         try
         {

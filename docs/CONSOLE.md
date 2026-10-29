@@ -151,7 +151,9 @@ hostname target hits both — rename one to disambiguate.)
   tasks and startup entries it made, and its install folder (`C:\Windows\Orch`), takes its own
   heartbeat off GitHub (so it leaves this list) and stops reporting or updating. The PC has to be
   switched on within **an hour**: the command is deliberately short-lived, so a PC you reinstall later
-  can't find an old one waiting for it. If it was missed, the machine is still listed; press it again.
+  can't find an old one waiting for it. For the same reason the agent only obeys an uninstall that was
+  made while its service was already running: if the PC restarted (or was reinstalled) after you pressed
+  it, the agent ignores it and logs why. If it was missed, the machine is still listed; press it again.
   Programs the agent installed *outside* its own folder are not touched; take the PC out of their
   targeting first (and let it sync) if you want them gone too.
 - **Only remove it from this list.** Deletes that machine's heartbeat and screenshots from the
