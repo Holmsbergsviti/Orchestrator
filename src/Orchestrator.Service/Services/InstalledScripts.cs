@@ -6,8 +6,8 @@
 //   Self-update downloads only the exe, then runs the install.ps1 that is ALREADY on the
 //   machine. That script rewrites appsettings.json from scratch, keeping only the settings it
 //   knows about. So without this, a machine keeps the install.ps1 from its first install
-//   forever, and every self-update quietly wipes any setting added since — StateRepoOwner,
-//   for example, which would put a machine straight back on the read-write token path.
+//   forever, and every self-update quietly wipes any setting added since (that is how RelayUrl
+//   went missing fleet-wide once).
 //
 //   The fix: both scripts are embedded in the exe (whose hash self-update already verified),
 //   and on startup the service writes them out whenever the copy on disk differs.
