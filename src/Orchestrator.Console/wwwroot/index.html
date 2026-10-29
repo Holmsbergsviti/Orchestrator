@@ -137,6 +137,30 @@
     ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
     /* On a phone the header wraps to several lines, so pinning it would eat the screen. */
+    /* "New version" flag: a loud bar across the top whenever GitHub has newer console code, and a
+       full-screen overlay (until updated) that stops the page being used on an old version. */
+    #upgradeBar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px;
+                  background: #1a0008; color: #fff; border-bottom: 3px solid var(--err);
+                  font-size: 16px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+                  animation: upgradePulse 1.4s ease-in-out infinite; }
+    #upgradeBar[hidden], #upgrade[hidden] { display: none; }
+    #upgradeBar .grow { flex: 1; min-width: 200px; }
+    #upgradeBar button { font-size: 14px; font-weight: 700; }
+    @keyframes upgradePulse { 50% { background: #4d0014; } }
+    #upgrade { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+               padding: 20px; background: rgba(0, 0, 0, .9); }
+    #upgrade .box { max-width: 640px; width: 100%; max-height: 90vh; overflow: auto; padding: 28px 30px;
+                    background: #050a06; border: 2px solid var(--err); box-shadow: 0 0 28px rgba(255, 59, 92, .6); }
+    #upgrade .big { font-size: 28px; font-weight: 800; color: var(--err); letter-spacing: .05em; text-transform: uppercase;
+                    text-shadow: 0 0 10px rgba(255, 59, 92, .7); animation: upgradeBlink 1.2s steps(2, start) infinite; }
+    @keyframes upgradeBlink { 50% { opacity: .55; } }
+    #upgrade .lead { font-size: 16px; margin: 10px 0 14px; color: #fff; }
+    #upgrade ul { margin: 0 0 14px; padding-left: 20px; color: var(--ink); }
+    #upgrade .msg { margin: 0 0 14px; padding: 9px 12px; border: 1px solid var(--err); background: var(--errbg); color: var(--err); white-space: pre-wrap; }
+    #upgrade .msg:empty { display: none; }
+    #upgrade .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    #upgrade button.go { font-size: 16px; font-weight: 800; padding: 10px 22px; }
+    @media (prefers-reduced-motion: reduce) { #upgradeBar, #upgrade .big { animation: none; } }
     @media (max-width: 700px) { header { position: static; } }
     @media (prefers-reduced-motion: reduce) {
       header h1::after, .dot.on { animation: none; }
@@ -145,11 +169,28 @@
 </head>
 <body>
   <canvas id="rain" aria-hidden="true"></canvas>
+  <div id="upgradeBar" hidden role="alert">
+    <span class="grow" id="upgradeBarText"></span>
+    <button id="upgradeBarBtn" class="primary">Update now</button>
+  </div>
+  <div id="upgrade" hidden role="alertdialog" aria-modal="true" aria-labelledby="upgradeTitle">
+    <div class="box">
+      <div class="big" id="upgradeTitle">New version available</div>
+      <p class="lead" id="upgradeLead"></p>
+      <ul id="upgradeList"></ul>
+      <div class="msg" id="upgradeMsg"></div>
+      <div class="actions">
+        <button id="upgradeGo" class="primary go">Update now</button>
+        <button id="upgradeSkip" hidden>Keep using the old version for now</button>
+      </div>
+    </div>
+  </div>
   <header>
     <h1>Orchestrator Console</h1>
     <span class="repo" id="repo"></span>
     <span class="spacer"></span>
     <button id="reload">Reload</button>
+    <button id="update" title="Pull the newest version of the console from GitHub" hidden>Update</button>
     <button id="save" class="primary" disabled>Save &amp; push</button>
     <form method="post" action="/logout" style="margin:0"><button type="submit" title="Sign out">Sign out</button></form>
   </header>
@@ -262,7 +303,7 @@
       return n;
     };
 
-    function markDirty() { dirty = true; $('#save').disabled = false; }
+    function markDirty() { dirty = true; $('#save').disabled = false; renderUpdate(); }
 
     function toast(msg, isErr = false) {
       const t = $('#toast');
@@ -312,7 +353,7 @@
     }
 
     async function load() {
-      $('#save').disabled = true; dirty = false;
+      $('#save').disabled = true; dirty = false; renderUpdate();
       let data;
       try {
         const r = await fetch('/api/state');
@@ -770,6 +811,91 @@
     // View switch + filter
     document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => { view = b.dataset.view; renderTargeting(); });
     $('#search').oninput = e => { filter = e.target.value; renderTargeting(); };
+
+    // ---- Update: the "new version" flag ------------------------------------------------
+    // Asks GitHub (in the background, so it never slows the page down) whether the console's own
+    // code has moved on. If it has, a red bar runs across the top and a full-screen overlay asks
+    // for the upgrade before the page is used any further. The server pulls (fast-forward only,
+    // never touching local work) and says whether a restart or just a page reload follows.
+    // Two ways out are deliberately kept so a broken clone can't lock the operator out of the
+    // fleet: the overlay is held back while there are unsaved edits (the bar still shows), and
+    // after a failed update it offers "keep using the old version for now". A needed RESTART has
+    // no way out — the code on disk is already newer than what is running.
+    let updateInfo = null;
+    let updateError = '';        // why the last update attempt failed, shown in the overlay
+    let updateSkipped = false;   // the operator chose to carry on after a failure
+    let updateBusy = false;
+    let updateForce = false;     // the bar's button was pressed: show the overlay even with unsaved edits
+
+    function renderUpdate() {
+      const btn = $('#update'), bar = $('#upgradeBar'), ov = $('#upgrade');
+      const info = updateInfo;
+      if (!info || !info.available) { btn.hidden = true; bar.hidden = true; ov.hidden = true; return; }
+      const behind = info.behind || [];
+      const restart = !!info.restartNeeded;
+      btn.hidden = false;
+      btn.textContent = behind.length ? `Update (${behind.length} new)` : 'Update';
+      btn.classList.toggle('primary', behind.length > 0);
+      if (!behind.length && !restart) { bar.hidden = true; ov.hidden = true; return; }
+
+      const what = restart ? 'Restart the console to finish upgrading' : `New version available — ${behind.length} change${behind.length === 1 ? '' : 's'} on GitHub`;
+      $('#upgradeBarText').textContent = '⚠ ' + what + (restart ? '' : dirty ? ' — save or discard your edits, then upgrade' : ' — you have to upgrade');
+      $('#upgradeBarBtn').hidden = restart;
+      bar.hidden = false;
+
+      // The overlay: always for a restart; otherwise unless there are unsaved edits or the operator opted out.
+      const showOverlay = restart || (!updateSkipped && (!dirty || updateForce));
+      ov.hidden = !showOverlay;
+      if (!showOverlay) return;
+      $('#upgradeTitle').textContent = restart ? 'Restart required' : 'New version available';
+      $('#upgradeLead').textContent = restart
+        ? 'The new version is downloaded, but this console is still running the old one. Stop it (Ctrl+C in its terminal) and start it again, then reload this page.'
+        : 'You have to upgrade the console before you carry on. It takes a few seconds.';
+      const list = $('#upgradeList'); list.replaceChildren();
+      if (!restart) {
+        behind.slice(0, 10).forEach(c => list.append(el('li', { textContent: c })));
+        if (behind.length > 10) list.append(el('li', { textContent: `…and ${behind.length - 10} more` }));
+      }
+      $('#upgradeMsg').textContent = updateError;
+      $('#upgradeGo').hidden = restart;
+      $('#upgradeGo').disabled = updateBusy;
+      $('#upgradeGo').textContent = updateBusy ? 'Updating…' : 'Update now';
+      $('#upgradeSkip').hidden = restart || !updateError;   // only offered once an update has actually failed
+    }
+
+    async function checkUpdate() {
+      try { updateInfo = await (await fetch('/api/update-status')).json(); }
+      catch { return; }   // offline: keep whatever is showing
+      renderUpdate();
+    }
+
+    async function doUpdate() {
+      if (updateBusy) return;
+      updateBusy = true; updateError = ''; renderUpdate();
+      try {
+        const r = await fetch('/api/update', { method: 'POST' });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) {
+          toast(res.message);
+          if (res.reloadNeeded && !res.restartNeeded && !dirty) { location.reload(); return; }   // only the page changed: just reload it
+        } else updateError = res.message || res.detail || 'Unknown error';
+      } catch (e) { updateError = e.message; }
+      finally { updateBusy = false; }
+      updateForce = false;
+      await checkUpdate();
+      renderUpdate();
+    }
+
+    $('#update').onclick = () => {
+      const behind = updateInfo?.behind || [];
+      if (behind.length === 0 && !updateInfo?.restartNeeded) { toast('Already up to date'); checkUpdate(); return; }
+      updateSkipped = false; updateForce = true; renderUpdate();   // the same overlay as the automatic one
+    };
+    $('#upgradeBarBtn').onclick = () => { updateSkipped = false; updateForce = true; renderUpdate(); };
+    $('#upgradeGo').onclick = doUpdate;
+    $('#upgradeSkip').onclick = () => { updateSkipped = true; renderUpdate(); };
+    checkUpdate();
+    setInterval(checkUpdate, 5 * 60 * 1000);   // a long-open tab still finds out
 
     $('#reload').onclick = () => {
       if (dirty && !confirm('Discard unsaved changes and reload?')) return;

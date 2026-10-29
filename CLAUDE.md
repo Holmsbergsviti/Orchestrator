@@ -158,6 +158,18 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
   only the intended fields change and everything else round-trips untouched.
 - Targeting is written as **hostnames** (readable), translated from the stable machine ids the UI tracks.
 - Saves refuse a **dirty or diverged** clone (fast-forward-only) to avoid clobbering; surfaced as a UI error.
+- A save that fails at any step is **rolled back** (`GitRepo.CommitAndPushAsync` resets to the pre-edit HEAD and
+  removes files it created). Otherwise a rejected push left a commit stranded on local main and every later save was
+  refused as diverged — easy to hit, because CI pushes `agent.json` to the control repo on every agent build. A
+  rejected push (`PushRejectedException`) is retried once from a fresh fetch, and all writes run under one gate
+  (`ControlRepo.MutateAsync`). New write operations must go through `MutateAsync` and `CommitSignedAsync`.
+
+- **The console updates itself (`ConsoleUpdater`).** It finds the code clone it runs from (walks up to
+  the `.git` + `Orchestrator.sln` folder, or `Console:CodeRepoPath`), reports commits behind `origin/main`,
+  and on request fast-forwards — refusing a dirty tree or local commits not on GitHub, never merging. The page
+  shows a red bar + blocking overlay when behind (held back while there are unsaved edits; after a failed update
+  an escape hatch is offered so a broken clone can't lock the operator out). "Restart needed" is computed from
+  the commit the *process started at* vs HEAD, so it survives page reloads and manual `git pull`s.
 
 ## Conventions
 

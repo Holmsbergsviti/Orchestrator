@@ -63,6 +63,7 @@ builder.Services.AddSingleton(opt);
 builder.Services.AddSingleton<RelayHub>();
 builder.Services.AddSingleton<RelayKeyStore>();
 builder.Services.AddSingleton<ControlSigning>();
+builder.Services.AddSingleton<ConsoleUpdater>();
 builder.Services.AddSingleton<ControlRepo>();
 builder.Services.AddSingleton<LoginLockout>();
 
@@ -378,6 +379,14 @@ app.Map("/relay/agent", async (HttpContext ctx, RelayHub relay) =>
     }
     using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
     await relay.RunAgentAsync(sessionId, ws, ctx.RequestAborted);
+});
+
+// The Update button: what's new on GitHub for the console's own code, and pulling it.
+app.MapGet("/api/update-status", async (ConsoleUpdater u, CancellationToken ct) => Results.Ok(await u.StatusAsync(ct)));
+app.MapPost("/api/update", async (ConsoleUpdater u, CancellationToken ct) =>
+{
+    var result = await u.UpdateAsync(ct);
+    return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
 });
 
 // A tiny health/info endpoint the page uses to show which repo it's driving.

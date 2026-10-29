@@ -40,6 +40,12 @@ Signed control files are on, and the file isn't signed by your key. The reason s
 - *"has no checksum ... signed mode requires one"* — re-add the program from the console, or
   add `"checksum"` (see ADDING-PROGRAMS.md) and Sign.
 
+## Console: "Your local copy of 'main' and GitHub have each moved on"
+Your clone has a commit that was never pushed, and GitHub has newer ones too (the auto-publish adds a
+commit to the control repo for every agent build). The console never merges for you. In a terminal in the
+control-repo folder run what the message says: `git pull --rebase origin main && git push origin main`.
+Failed console saves no longer cause this themselves; they undo their own commit and retry once.
+
 ## `GitHub path not found`
 The `path`/`url` in the manifest doesn't resolve.
 - Check the repo-relative `path` is exact (case-sensitive).

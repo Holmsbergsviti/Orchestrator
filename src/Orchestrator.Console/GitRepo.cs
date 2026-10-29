@@ -13,6 +13,13 @@ namespace Orchestrator.Console;
 /// <summary>Raised when a git command exits non-zero; carries stderr for the UI.</summary>
 public sealed class GitException(string message) : Exception(message);
 
+/// <summary>The push step failed after a local commit was made — usually because GitHub moved
+/// on while we were editing (CI publishes agent.json to the same repo on every agent build).
+/// <see cref="GitRepo.CommitAndPushAsync"/> has already undone the local commit when this is
+/// thrown, so retrying from scratch is safe. A separate type from the generic GitException so
+/// callers can retry exactly this case and nothing else.</summary>
+public sealed class PushRejectedException(string message) : Exception(message);
+
 /// <summary>Runs git commands against a single local repository directory.</summary>
 public sealed class GitRepo(string repoPath)
 {
@@ -82,14 +89,67 @@ public sealed class GitRepo(string repoPath)
         await RunAsync(ct, "merge", "--ff-only", $"{remote}/{branch}");
     }
 
-    /// <summary>Stage the given paths, commit, and push. Returns the new commit's short SHA.</summary>
+    /// <summary>The branch checked out now, or null when HEAD is detached.</summary>
+    public string? CurrentBranch()
+        => TryRun(out var o, out _, "symbolic-ref", "--short", "-q", "HEAD") && !string.IsNullOrWhiteSpace(o) ? o.Trim() : null;
+
+    /// <summary>Subjects of the commits on <paramref name="theirs"/> that <paramref name="mine"/> doesn't have,
+    /// newest first ("what would I get by updating?").</summary>
+    public IReadOnlyList<string> CommitsBehind(string mine, string theirs)
+        => TryRun(out var o, out _, "log", "--format=%s", $"{mine}..{theirs}")
+            ? o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : Array.Empty<string>();
+
+    /// <summary>True when <paramref name="mine"/> has commits that <paramref name="theirs"/> doesn't.</summary>
+    public bool HasCommitsNotIn(string mine, string theirs)
+        => TryRun(out var o, out _, "rev-list", "--count", $"{theirs}..{mine}") && int.TryParse(o.Trim(), out var n) && n > 0;
+
+    /// <summary>Paths that differ between two revisions.</summary>
+    public IReadOnlyList<string> ChangedPaths(string from, string to)
+        => TryRun(out var o, out _, "diff", "--name-only", from, to)
+            ? o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : Array.Empty<string>();
+
+    /// <summary>The full SHA HEAD points at now, or null when it can't be read (synchronous twin of <see cref="HeadAsync"/>).</summary>
+    public string? Head() => TryRun(out var o, out _, "rev-parse", "HEAD") ? o.Trim() : null;
+
+    /// <summary>The full SHA HEAD points at now.</summary>
+    public async Task<string> HeadAsync(CancellationToken ct) => (await RunAsync(ct, "rev-parse", "HEAD")).Trim();
+
+    /// <summary>Put the working tree back exactly as it was at <paramref name="sha"/>: drops any
+    /// commit made since, restores edited files, and deletes the given paths if they were newly
+    /// created (e.g. a program file copied in, or a fresh .sig). Only safe because every console
+    /// save starts from a clean tree.</summary>
+    public async Task RollbackAsync(string sha, IEnumerable<string> paths)
+    {
+        await RunAsync(CancellationToken.None, "reset", "--hard", sha);
+        foreach (var p in paths)
+            TryRun(out _, out _, "clean", "-fdq", "--", p);   // best effort: a path that never existed is fine
+    }
+
+    /// <summary>Stage the given paths, commit, and push. Returns the new commit's short SHA.
+    /// If ANY step fails, the clone is put back exactly as it was before: a commit that never
+    /// reached GitHub would otherwise sit on local main, and every later save would then be
+    /// refused as "diverged" until someone repaired the clone by hand. A failed push is
+    /// reported as <see cref="PushRejectedException"/> so the caller can retry once.</summary>
     public async Task<string> CommitAndPushAsync(string remote, string branch, string message, IEnumerable<string> paths, CancellationToken ct)
     {
-        foreach (var p in paths) await RunAsync(ct, "add", "--", p);
-        await RunAsync(ct, "commit", "-m", message);
-        var sha = (await RunAsync(ct, "rev-parse", "--short", "HEAD")).Trim();
-        await RunAsync(ct, "push", remote, branch);
-        return sha;
+        var all = paths.ToList();
+        var start = await HeadAsync(ct);
+        try
+        {
+            foreach (var p in all) await RunAsync(ct, "add", "--", p);
+            await RunAsync(ct, "commit", "-m", message);
+            var sha = (await RunAsync(ct, "rev-parse", "--short", "HEAD")).Trim();
+            try { await RunAsync(ct, "push", remote, branch); }
+            catch (GitException ex) { throw new PushRejectedException(ex.Message); }
+            return sha;
+        }
+        catch (Exception)
+        {
+            await RollbackAsync(start, all);
+            throw;
+        }
     }
 
     // ---- process plumbing --------------------------------------------------------------

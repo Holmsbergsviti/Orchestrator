@@ -34,6 +34,9 @@ public sealed class ConsoleOptions
     /// <summary>Where the operator's private signing key lives. Blank = per-user app data
     /// (see ControlSigning.DefaultKeyPath). Never inside a repo.</summary>
     public string SigningKeyPath { get; set; } = "";
+    /// <summary>The clone of the CODE repo the console runs from, for the Update button. Blank =
+    /// found by walking up from where the console is running.</summary>
+    public string CodeRepoPath { get; set; } = "";
 }
 
 // ---- wire models (what the web page receives / sends) --------------------------------
@@ -289,6 +292,37 @@ public sealed class ControlRepo
     private string MainRef => $"{_opt.Remote}/{_opt.MainBranch}";
     private string FleetRef => $"{_opt.Remote}/{_opt.FleetStateBranch}";
 
+    // ---- one writer at a time, and one retry when GitHub moved ----------------------------
+
+    /// <summary>Every console write is fetch, edit files in the clone, commit, push. Two at once
+    /// (two quick clicks, or Save then Run now) would edit the same working tree and fight over
+    /// git's index lock, so they take turns.</summary>
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+
+    /// <summary>Run one write under the gate. If the push is rejected because GitHub moved on
+    /// while we worked (CI publishes agent.json here on every agent build), the clone has already
+    /// been put back, so the whole operation is simply run again from a fresh fetch — it is
+    /// written to be re-runnable, since each edit is re-derived from what main contains now. A
+    /// second rejection is reported instead of looping.</summary>
+    private async Task<T> MutateAsync<T>(Func<Task<T>> body, Func<string, T> fail, CancellationToken ct)
+    {
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            try { return await body(); }
+            catch (PushRejectedException first)
+            {
+                _log.LogInformation("push rejected ({Reason}); retrying once from a fresh fetch", first.Message.Split('\n')[0]);
+                try { return await body(); }
+                catch (PushRejectedException second)
+                {
+                    return fail($"GitHub didn't accept the push (twice): {second.Message.Split('\n')[0]}. Nothing was changed on your computer or on GitHub; try again in a moment.");
+                }
+            }
+        }
+        finally { _writeGate.Release(); }
+    }
+
     /// <summary>Fetch, then build the combined fleet + programs view for the UI.</summary>
     public async Task<StateResponse> LoadStateAsync(CancellationToken ct)
     {
@@ -330,7 +364,10 @@ public sealed class ControlRepo
     }
 
     /// <summary>Apply targeting/activation + label edits to the repo and push. Returns the outcome.</summary>
-    public async Task<SaveResult> SaveAsync(SaveRequest req, CancellationToken ct)
+    public Task<SaveResult> SaveAsync(SaveRequest req, CancellationToken ct)
+        => MutateAsync(() => SaveCoreAsync(req, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> SaveCoreAsync(SaveRequest req, CancellationToken ct)
     {
         var err = await PrepareCleanMainAsync(ct);
         if (err is not null) return Fail(err);
@@ -379,7 +416,10 @@ public sealed class ControlRepo
     }
 
     /// <summary>Add a new program to the manifest (optionally importing a local file) and push.</summary>
-    public async Task<SaveResult> AddProgramAsync(AddRequest req, CancellationToken ct)
+    public Task<SaveResult> AddProgramAsync(AddRequest req, CancellationToken ct)
+        => MutateAsync(() => AddProgramCoreAsync(req, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> AddProgramCoreAsync(AddRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Name)) return Fail("Program name is required.");
         var validTypes = new[] { "exe", "batch", "powershell", "vbs", "python" };
@@ -468,7 +508,10 @@ public sealed class ControlRepo
     }
 
     /// <summary>Trigger a one-time interactive "run now" by rotating the program's runRequest token, then push.</summary>
-    public async Task<SaveResult> RunNowAsync(string programId, CancellationToken ct)
+    public Task<SaveResult> RunNowAsync(string programId, CancellationToken ct)
+        => MutateAsync(() => RunNowCoreAsync(programId, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> RunNowCoreAsync(string programId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(programId)) return Fail("Program id is required.");
         var err = await PrepareCleanMainAsync(ct);
@@ -500,7 +543,10 @@ public sealed class ControlRepo
 
     /// <summary>Remove a program from the manifest entirely (and its repo file), then push.
     /// Machines that have it uninstall it on their next sync; machines that never had it are unaffected.</summary>
-    public async Task<SaveResult> DeleteProgramAsync(string programId, CancellationToken ct)
+    public Task<SaveResult> DeleteProgramAsync(string programId, CancellationToken ct)
+        => MutateAsync(() => DeleteProgramCoreAsync(programId, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> DeleteProgramCoreAsync(string programId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(programId)) return Fail("Program id is required.");
         var err = await PrepareCleanMainAsync(ct);
@@ -552,7 +598,10 @@ public sealed class ControlRepo
     }
 
     /// <summary>Send an admin command (shutdown/restart) to a machine via commands.json, then push.</summary>
-    public async Task<SaveResult> SendCommandAsync(string machineId, string action, CancellationToken ct)
+    public Task<SaveResult> SendCommandAsync(string machineId, string action, CancellationToken ct)
+        => MutateAsync(() => SendCommandCoreAsync(machineId, action, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> SendCommandCoreAsync(string machineId, string action, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(machineId)) return Fail("Machine id is required.");
         action = (action ?? string.Empty).Trim().ToLowerInvariant();
@@ -586,7 +635,10 @@ public sealed class ControlRepo
     }
 
     /// <summary>Queue Wake-on-LAN requests for the given machines (by their reported MAC), then push.</summary>
-    public async Task<SaveResult> SendWakeAsync(List<string> machineIds, CancellationToken ct)
+    public Task<SaveResult> SendWakeAsync(List<string> machineIds, CancellationToken ct)
+        => MutateAsync(() => SendWakeCoreAsync(machineIds, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> SendWakeCoreAsync(List<string> machineIds, CancellationToken ct)
     {
         if (machineIds is null || machineIds.Count == 0) return Fail("No machines selected.");
         var err = await PrepareCleanMainAsync(ct);
@@ -638,7 +690,10 @@ public sealed class ControlRepo
     /// <summary>Request a screenshot capture from a machine via commands.json, then push. The
     /// actual capture happens on the machine's next sync, in its logged-on user's session
     /// (a Windows service has no desktop of its own) — so it needs someone signed in there.</summary>
-    public async Task<SaveResult> SendScreenshotAsync(string machineId, CancellationToken ct)
+    public Task<SaveResult> SendScreenshotAsync(string machineId, CancellationToken ct)
+        => MutateAsync(() => SendScreenshotCoreAsync(machineId, ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> SendScreenshotCoreAsync(string machineId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(machineId)) return Fail("Machine id is required.");
         var err = await PrepareCleanMainAsync(ct);
@@ -680,7 +735,10 @@ public sealed class ControlRepo
     /// and register the session's single-use token with the relay so the eventual agent/viewer
     /// connections are recognized. The actual session starts on the machine's next sync, in its
     /// logged-on user's session — same constraint as screenshots.</summary>
-    public async Task<RemoteSessionResult> StartRemoteSessionAsync(string machineId, CancellationToken ct)
+    public Task<RemoteSessionResult> StartRemoteSessionAsync(string machineId, CancellationToken ct)
+        => MutateAsync(() => StartRemoteSessionCoreAsync(machineId, ct), m => new RemoteSessionResult { Ok = false, Message = m }, ct);
+
+    private async Task<RemoteSessionResult> StartRemoteSessionCoreAsync(string machineId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(machineId)) return new RemoteSessionResult { Ok = false, Message = "Machine id is required." };
 
@@ -788,7 +846,13 @@ public sealed class ControlRepo
         if (!_git.IsClean())
             return "The control-repo clone has uncommitted changes. Commit or discard them, then retry.";
         try { await _git.SyncBranchToRemoteAsync(_opt.Remote, _opt.MainBranch, ct); }
-        catch (GitException ex) { return $"Could not fast-forward '{_opt.MainBranch}' to the remote: {ex.Message}"; }
+        catch (GitException ex)
+        {
+            return $"Your local copy of '{_opt.MainBranch}' and GitHub have each moved on (a commit made here that was never pushed, " +
+                   $"plus newer ones on GitHub — the auto-publish adds one for every agent build). Fix it once in a terminal in " +
+                   $"{_opt.ControlRepoPath}: git pull --rebase {_opt.Remote} {_opt.MainBranch} && git push {_opt.Remote} {_opt.MainBranch}   " +
+                   $"(details: {ex.Message.Split('\n')[0]})";
+        }
         if (requireSigned && _signing.HasKey && ReadSigningStatus(null).Unsigned.FirstOrDefault() is { } u)
             return $"{u.Path} has changes that aren't signed ({(u.LastChange is null ? "" : "last changed by " + u.LastChange + "; ")}" +
                    "made outside this console, or by another key). Check that change on GitHub; if it's yours, press Sign, then retry.";
@@ -831,6 +895,22 @@ public sealed class ControlRepo
     private async Task<string> CommitSignedAsync(string message, IEnumerable<string> paths, CancellationToken ct)
     {
         var all = paths.ToList();
+        var start = await _git.HeadAsync(ct);
+        try
+        {
+            return await SignAndCommitAsync(message, all, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // CommitAndPushAsync undoes its own failures; this covers the signing step before it,
+            // which may already have written .sig files into the tree.
+            await _git.RollbackAsync(start, all.Concat(SignedFiles.Select(f => f + ".sig")));
+            throw;
+        }
+    }
+
+    private async Task<string> SignAndCommitAsync(string message, List<string> all, CancellationToken ct)
+    {
         if (_signing.HasKey)
         {
             foreach (var path in SignedFiles.Where(f => all.Contains(f)))
@@ -852,7 +932,10 @@ public sealed class ControlRepo
 
     /// <summary>The operator vouches for the control files exactly as they are on main now
     /// (after a hand edit, or the first time signing is set up), and signs them.</summary>
-    public async Task<SaveResult> SignNowAsync(CancellationToken ct)
+    public Task<SaveResult> SignNowAsync(CancellationToken ct)
+        => MutateAsync(() => SignNowCoreAsync(ct), m => new SaveResult { Ok = false, Message = m }, ct);
+
+    private async Task<SaveResult> SignNowCoreAsync(CancellationToken ct)
     {
         if (!_signing.HasKey) return new SaveResult { Ok = false, Message = "This computer has no signing key — see docs/SETUP.md, \"Sign the control files\"." };
         var err = await PrepareCleanMainAsync(ct, requireSigned: false);
