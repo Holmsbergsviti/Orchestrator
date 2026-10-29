@@ -22,6 +22,8 @@ on:
     paths:
       - 'src/**'
       - 'defaults.json'
+      - 'scripts/install.ps1'        # embedded in the exe (InstalledScripts.cs), so a change is a new build
+      - 'scripts/update-agent.ps1'
       - 'Orchestrator.sln'
       - '.github/workflows/publish-agent.yml'
   workflow_dispatch:   # lets you republish by hand without an empty commit

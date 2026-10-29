@@ -83,4 +83,17 @@ public sealed class StateRepoTests
         Assert.Equal(GitHubClient.HttpClientName, probe.Client);       // it's the CONTROL token being tested
         Assert.Equal("/repos/me/control/git/refs", probe.Path);
     }
+
+    [Theory]
+    [InlineData("scripts/install.ps1", "StateRepoOwner")]
+    [InlineData("scripts/update-agent.ps1", "install.ps1")]
+    public void InstallerScripts_AreEmbeddedInTheAgent(string resource, string mustContain)
+    {
+        // Self-update only downloads the exe; these embedded copies are how a machine's on-disk
+        // install.ps1 learns about new settings (InstalledScripts). If one went missing, every
+        // update would silently drop the state-repo settings again.
+        using var stream = typeof(InstalledScripts).Assembly.GetManifestResourceStream(resource);
+        Assert.NotNull(stream);
+        Assert.Contains(mustContain, new StreamReader(stream!).ReadToEnd());
+    }
 }

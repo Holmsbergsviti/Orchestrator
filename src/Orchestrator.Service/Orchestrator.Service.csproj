@@ -70,6 +70,16 @@
     <EmbeddedResource Include="..\..\defaults.json">
       <LogicalName>defaults.json</LogicalName>
     </EmbeddedResource>
+    <!-- The installer scripts ride inside the exe too, so a self-updated machine can refresh its
+         on-disk copies (InstalledScripts.cs). Self-update only ever downloads the exe; without
+         this, machines keep the install.ps1 they were first installed with forever, and it
+         silently drops any setting it doesn't know about on every update. -->
+    <EmbeddedResource Include="..\..\scripts\install.ps1">
+      <LogicalName>scripts/install.ps1</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\scripts\update-agent.ps1">
+      <LogicalName>scripts/update-agent.ps1</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

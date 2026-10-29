@@ -40,6 +40,10 @@ public sealed class Worker : BackgroundService   // BackgroundService = a long-r
         if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
             _log.LogInformation("Build: exe {Exe} built {BuiltUtc:u}", exe, File.GetLastWriteTimeUtc(exe));
 
+        // Bring the on-disk installer scripts up to this build's, BEFORE the first sync — the first
+        // sync can be the one that self-updates, and that runs whatever install.ps1 is on disk.
+        InstalledScripts.Refresh(_config, _log);
+
         var interval = TimeSpan.FromMinutes(Math.Max(1, _config.SyncIntervalMinutes));  // wait time between syncs (at least 1 minute)
 
         while (!stoppingToken.IsCancellationRequested)  // keep looping until the service is asked to stop

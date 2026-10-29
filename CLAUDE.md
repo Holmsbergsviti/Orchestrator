@@ -133,6 +133,10 @@ that matter:
   `cache/failed-updates.json`, which `SelfUpdateService` honours — without that, a rollback puts
   the machine back on the old build, the published hash still mismatches, and it reinstalls the
   broken build forever.
+- Self-update downloads only the exe, yet runs the `install.ps1` already on disk — which
+  rewrites `appsettings.json` keeping only the keys it knows. So both scripts are embedded in
+  the exe and `InstalledScripts` rewrites the on-disk copies at service start; a new setting
+  added to `install.ps1` reaches machines with the next build instead of being wiped by it.
 - Heartbeats carry `agentSha256` (the running exe's hash) and the console compares it to
   `agent.json`, so "which machines are on the current build" is answerable.
 
