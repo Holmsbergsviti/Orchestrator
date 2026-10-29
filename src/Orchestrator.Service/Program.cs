@@ -12,6 +12,7 @@ using System.Runtime.InteropServices;                 // AttachConsole P/Invoke
 using Microsoft.Extensions.DependencyInjection;       // for resolving services (GetRequiredService)
 using Microsoft.Extensions.Hosting.WindowsServices;   // helpers to detect if we're running as a Windows service
 using Orchestrator.Service;                            // our own namespaces below
+using Orchestrator.Service.Models;                     // RelayHint (validating the session verb's arguments)
 using Orchestrator.Service.Services;
 using Serilog;                                         // the logging library
 
@@ -167,7 +168,7 @@ static int RunRemoteSession(string[] args)
     var id = args.Length > 1 ? args[1] : null;
     if (string.IsNullOrWhiteSpace(id))
     {
-        Console.Error.WriteLine("usage: remote-session <sessionId> [proof]");
+        Console.Error.WriteLine("usage: remote-session <sessionId> [proof|-] [relayUrl] [relayThumbprint|-]");
         return 2;
     }
     try
@@ -182,8 +183,12 @@ static int RunRemoteSession(string[] args)
 
         using var host = builder.Build();
         var session = host.Services.GetRequiredService<IRemoteSessionService>();
-        var proof = args.Length > 2 ? args[2] : null;   // the service's signature for this session (see RelayIdentity)
-        return session.RunAsync(id, proof, CancellationToken.None).GetAwaiter().GetResult();
+        var proof = args.Length > 2 && args[2] != "-" ? args[2] : null;   // the service's signature for this session (see RelayIdentity)
+        // Where to dial, when the service got it from the signed relay hint ("-" = pin nothing).
+        // Re-checked here: this process is started from a command line, whoever wrote it.
+        var relayUrl = args.Length > 3 && RelayHint.IsWellFormedUrl(args[3]) ? args[3] : null;
+        var relayThumb = args.Length > 4 && args[4] != "-" && RelayHint.IsWellFormedThumbprint(args[4]) ? args[4] : null;
+        return session.RunAsync(id, proof, relayUrl, relayThumb, CancellationToken.None).GetAwaiter().GetResult();
     }
     catch (Exception ex)
     {

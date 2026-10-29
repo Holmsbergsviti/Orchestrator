@@ -9,6 +9,7 @@
 // =====================================================================================
 
 using System.Security.Cryptography;        // SHA256 for imported program files
+using System.Text;
 using System.Text.Json;                    // parsing/serializing
 using System.Text.Json.Nodes;              // JsonNode DOM for safe manifest edits
 using System.Text.Json.Serialization;      // attribute mapping for the DTOs
@@ -37,6 +38,9 @@ public sealed class ConsoleOptions
     /// <summary>The clone of the CODE repo the console runs from, for the Update button. Blank =
     /// found by walking up from where the console is running.</summary>
     public string CodeRepoPath { get; set; } = "";
+    /// <summary>The ws(s):// address PCs should dial for live screen sessions, if it isn't simply this
+    /// computer's name and the port in <c>Urls</c> (say, a VPN name). Blank = work it out. See RelayAdvert.</summary>
+    public string RelayAdvertiseUrl { get; set; } = "";
 }
 
 // ---- wire models (what the web page receives / sends) --------------------------------
@@ -271,14 +275,16 @@ public sealed class ControlRepo
     private readonly RelayHub _relay;
     private readonly RelayKeyStore _keys;
     private readonly ControlSigning _signing;
+    private readonly RelayAdvert? _advert;   // what a PC is told to dial for a session; null = nothing to say
     private readonly ILogger<ControlRepo> _log;
 
     /// <summary>The files agents refuse unless signed (agent.json too, but CI signs that one).</summary>
     private static readonly string[] SignedFiles = { ManifestPath, "commands.json" };
 
-    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, ILogger<ControlRepo> log)
+    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, ILogger<ControlRepo> log, RelayAdvert? advert = null)
     {
         _signing = signing;
+        _advert = advert;
         _opt = opt;
         _git = new GitRepo(opt.ControlRepoPath);
         _relay = relay;
@@ -789,6 +795,19 @@ public sealed class ControlRepo
         };
         File.WriteAllText(full, root.ToJsonString(JsonWrite));
 
+        // Tell the machine where to dial BEFORE the request becomes visible, so an agent that sees
+        // the request can always find the address. It goes on a throwaway branch, never main.
+        var hinted = false;
+        try
+        {
+            hinted = await PublishRelayHintAsync(machineId, sessionId, ct);
+        }
+        catch (GitException ex)
+        {
+            await _git.RollbackAsync(await _git.HeadAsync(ct), new[] { cmdPath });
+            return new RemoteSessionResult { Ok = false, Message = $"Couldn't publish the session address: {ex.Message}" };
+        }
+
         try
         {
             var sha = await CommitSignedAsync(
@@ -807,7 +826,130 @@ public sealed class ControlRepo
                 Commit = sha
             };
         }
-        catch (GitException ex) { return new RemoteSessionResult { Ok = false, Message = $"Commit/push failed: {ex.Message}" }; }
+        catch (GitException ex)
+        {
+            if (hinted) await TryRemoveRelayHintAsync(machineId, sessionId);
+            return new RemoteSessionResult { Ok = false, Message = $"Commit/push failed: {ex.Message}" };
+        }
+        catch (PushRejectedException)
+        {
+            // MutateAsync is about to run this whole operation again with a new session id.
+            if (hinted) await TryRemoveRelayHintAsync(machineId, sessionId);
+            throw;
+        }
+    }
+
+    // ---- the throwaway relay hint ---------------------------------------------------------
+    // Where a PC should dial for a live session is published only for as long as the session
+    // can still start, on its own branch with a single parentless commit that is force-pushed
+    // and finally deleted — so it never enters the control repo's normal history, and nothing is
+    // left once the session is over. It is signed like the other control files; agents that
+    // enforce signing are the only ones that honour it (see RelayHint in the service).
+
+    private const string HintBranch = "relay-hint";
+    private const string HintPath = "relay-hint.json";
+    private string HintRef => $"{_opt.Remote}/{HintBranch}";
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _hintIds = new();   // sessions we published
+    private volatile bool _hintMayBeLeftOver;   // true after a console restart: the branch might hold sessions we forgot
+
+    /// <summary>Add this machine's session to the hint. Returns false when there is nothing to publish
+    /// (no address to advertise, or no key to sign with): the PC then uses its installed address.
+    /// Must be called with the write gate held.</summary>
+    private async Task<bool> PublishRelayHintAsync(string machineId, string sessionId, CancellationToken ct)
+    {
+        if (_advert is null || !_signing.HasKey) return false;
+        await RewriteRelayHintAsync(sessions =>
+        {
+            sessions[machineId] = new JsonObject
+            {
+                ["id"] = sessionId,
+                ["relayUrl"] = _advert.Url,
+                ["relayCertThumbprint"] = _advert.Thumbprint
+            };
+        }, ct, alsoKeep: sessionId);   // the relay only learns of this session once its request is on GitHub
+        _hintIds[sessionId] = 0;
+        return true;
+    }
+
+    /// <summary>Read the hint as it is on GitHub, let <paramref name="edit"/> change its sessions,
+    /// drop every session the relay no longer knows, then publish the result — or delete the branch
+    /// when nothing is left. Must be called with the write gate held, after a fetch.</summary>
+    private async Task RewriteRelayHintAsync(Action<JsonObject> edit, CancellationToken ct, string? alsoKeep = null)
+    {
+        var current = _git.ReadFileBytesFromRef(HintRef, HintPath);
+        var previousSig = _git.ReadFileBytesFromRef(HintRef, HintPath + ".sig");
+        JsonObject sessions = new();
+        try
+        {
+            if (current is not null && JsonNode.Parse(current, NodeOpts) is JsonObject root && root["sessions"] is JsonObject s)
+                sessions = s;
+        }
+        catch (JsonException) { /* an unreadable hint is replaced, not repaired */ }
+
+        edit(sessions);
+        foreach (var machine in sessions.Select(kv => kv.Key).ToList())
+        {
+            var id = (sessions[machine] as JsonObject)?["id"]?.GetValue<string>();
+            if (id is null || (id != alsoKeep && !_relay.IsValid(id))) sessions.Remove(machine);   // over, expired, or never registered
+        }
+
+        if (sessions.Count == 0)
+        {
+            await _git.DeleteRemoteBranchAsync(_opt.Remote, HintBranch, ct);
+            _hintIds.Clear();
+            _hintMayBeLeftOver = false;
+            return;
+        }
+
+        var content = Encoding.UTF8.GetBytes(new JsonObject { ["sessions"] = sessions }.ToJsonString(JsonWrite) + "\n");
+        var sig = _signing.Sign(HintPath, content, previousSig);
+        await _git.PublishOrphanBranchAsync(_opt.Remote, HintBranch,
+            new Dictionary<string, byte[]> { [HintPath] = content, [HintPath + ".sig"] = sig },
+            "console: relay hint", ct);
+        foreach (var id in _hintIds.Keys.ToList())
+            if (!sessions.Any(kv => (kv.Value as JsonObject)?["id"]?.GetValue<string>() == id)) _hintIds.TryRemove(id, out _);
+    }
+
+    /// <summary>Best effort: take one session out of the hint after its request couldn't be sent.
+    /// (The janitor would catch it anyway; this just doesn't wait for it.)</summary>
+    private async Task TryRemoveRelayHintAsync(string machineId, string sessionId)
+    {
+        try
+        {
+            await _git.FetchAsync(_opt.Remote, CancellationToken.None);
+            await RewriteRelayHintAsync(sessions =>
+            {
+                if ((sessions[machineId] as JsonObject)?["id"]?.GetValue<string>() == sessionId) sessions.Remove(machineId);
+            }, CancellationToken.None);
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "couldn't take a failed session out of the relay hint; the janitor will"); }
+    }
+
+    /// <summary>Called when the console starts: a previous run may have died with sessions still
+    /// published, and it can no longer vouch for any of them.</summary>
+    public async Task NoteStartupAsync(CancellationToken ct)
+    {
+        try { _hintMayBeLeftOver = await _git.RemoteBranchExistsAsync(_opt.Remote, HintBranch, ct); }
+        catch (Exception ex) { _log.LogWarning(ex, "couldn't check GitHub for a leftover relay hint"); }
+    }
+
+    /// <summary>Remove from the hint every session that is over (or never started). Cheap when there is
+    /// nothing to do: it only touches the network when a session it published is no longer live.</summary>
+    public async Task SweepRelayHintAsync(CancellationToken ct)
+    {
+        if (!_hintMayBeLeftOver && !_hintIds.Keys.Any(id => !_relay.IsValid(id))) return;
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            await _git.FetchAsync(_opt.Remote, ct);
+            await RewriteRelayHintAsync(_ => { }, ct);
+        }
+        catch (Exception ex) when (ex is GitException or InvalidOperationException)
+        {
+            _log.LogWarning(ex, "couldn't clean up the relay hint; will try again");
+        }
+        finally { _writeGate.Release(); }
     }
 
     /// <summary>Why a machine can't take a remote session, in words that name the fix.</summary>

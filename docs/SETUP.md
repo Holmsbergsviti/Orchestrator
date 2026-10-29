@@ -157,9 +157,27 @@ Your **browser** will warn about a self-signed certificate the first time; accep
 Open the firewall for the port, and if you're reaching the console from outside your LAN,
 forward that port to it.
 
-### b. Point the agents at it
+### b. Tell the agents where it is
 
-Start the console and it prints exactly what to use:
+**Nothing to install on the PCs.** When you press **Remote**, the console tells that PC where to
+dial: its own *name* and port (on a Mac, `<name>.local`, which Windows finds on the same
+network), plus the certificate thumbprint to expect. It does this through the control repo, but
+only for as long as the session can start: the address is published on a throwaway branch
+(`relay-hint`) holding a single parentless commit, signed with your key like the other control
+files, and the branch is **deleted again** once the session ends (or if it never starts). It never
+enters `main`'s history, and PCs don't store or log it. So the console can run from any computer
+on the same network (or VPN) with no reinstall, and you never type an address anywhere.
+
+- Needs PCs on an agent that includes this, **and** [signed control files](#3a-sign-the-control-files-strongly-recommended)
+  turned on: an agent that doesn't verify signatures ignores the hint (anyone holding a copied
+  token could otherwise point a PC's screen at their own server) and uses the manual setting below.
+- To advertise something other than "this computer's name + the port in `Urls`" (a VPN name, say),
+  set `Console:RelayAdvertiseUrl` (for example `wss://ops.example.net:5080`).
+- A console bound to `localhost` advertises nothing; PCs then use the manual setting below.
+- GitHub itself keeps unreachable commits for a while after a branch is deleted; they are not
+  visible on the repo and can only be fetched by their exact id.
+
+**Manual setting (older agents, or no signing).** Start the console and it prints exactly what to use:
 
 ```text
 Remote control — settings for the agents (see docs/SETUP.md):

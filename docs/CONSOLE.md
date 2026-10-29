@@ -56,6 +56,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
 | `Console:SigningKeyPath` | Your private signing key for [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended) | *(your user profile; made by `-- signing-key`)* |
+| `Console:RelayAdvertiseUrl` | The `ws(s)://` address PCs should dial for live screen sessions, if not this computer's name + the port in `Urls` | *(worked out)* |
 | `Console:CodeRepoPath` | The clone of the *code* repo the console runs from, for [updating](#updating-the-console) | *(found automatically by walking up from where it runs)* |
 | `Urls` | Address the UI listens on | `http://localhost:5080` |
 
@@ -92,7 +93,8 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   alongside the heartbeats), a **View** link appears next to the button to open the latest one.
 - **Remote** (Machines table, Power column) — starts a **live remote-control session**: opens a
   viewer tab that shows that machine's screen at up to ~15 fps. Needs one-time setup on both
-  ends first (`Console:AccessToken` + a certificate here, `Orchestrator:RelayUrl` there) —
+  ends first (`Console:AccessToken` + a certificate here; PCs learn this console's address from a
+  signed, throwaway hint when you press Remote, or from `Orchestrator:RelayUrl` on older agents) —
   see [SETUP.md](SETUP.md#7-optional-live-remote-control). Requirements and behaviour:
   - The session starts on the machine's **next sync**, so the viewer waits (with a countdown)
     for up to 15 minutes. Lower that machine's `SyncIntervalMinutes` for a faster start.

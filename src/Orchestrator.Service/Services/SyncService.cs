@@ -407,9 +407,21 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 var proof = _relayIdentity.Sign(machine.MachineId, session.Id);
                 if (proof is null)
                     _log.LogWarning("remote-session '{Id}': no relay signing key on this machine; the console will refuse the session", session.Id);
+                // Where to dial. A signing build takes it from the operator's signed, throwaway
+                // relay hint (so the console can run from anywhere and its address never has to be
+                // installed here). A build that doesn't verify signatures must NOT: with a copied
+                // token anyone could write that file and point this PC's screen at their server,
+                // so it keeps using Orchestrator:RelayUrl.
+                string? relayUrl = null, relayThumbprint = null;
+                if (_verifier.Enforced)
+                {
+                    var hint = RelayHint.Pick(await _github.GetRelayHintAsync(ct), machine.MachineId, session.Id);
+                    if (hint is { } h) { relayUrl = h.Url; relayThumbprint = h.Thumbprint; }
+                    else _log.LogInformation("remote-session '{Id}': no relay hint for this session; using the configured address, if any", session.Id);
+                }
                 // Size the task's kill-switch for a fully renewed session, not a single grant —
                 // otherwise Task Scheduler would terminate a session the operator legitimately extended.
-                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, proof, _config.RemoteSessionAbsoluteMax);
+                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, proof, _config.RemoteSessionAbsoluteMax, relayUrl, relayThumbprint);
             }
             else
                 // Print BOTH clocks. The usual cause isn't a slow sync, it's this machine's clock
