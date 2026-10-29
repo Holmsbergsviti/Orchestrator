@@ -27,6 +27,8 @@ public sealed class RelayHub
     private sealed class RelaySession
     {
         public required string MachineId { get; init; }
+        /// <summary>The machine's pinned public key: the agent must sign with its private half.</summary>
+        public required string AgentPublicKey { get; init; }
         public DateTimeOffset ExpiresUtc { get; set; }
         public WebSocket? Viewer { get; set; }
         public WebSocket? Agent { get; set; }
@@ -53,8 +55,13 @@ public sealed class RelayHub
     /// agent (bearer token) and viewer (query string) connections are recognized once they
     /// eventually arrive. <paramref name="validFor"/> bounds how long this console will wait
     /// for BOTH sides to show up before giving up.</summary>
-    public void RegisterPending(string sessionId, string machineId, TimeSpan validFor)
-        => _sessions[sessionId] = new RelaySession { MachineId = machineId, ExpiresUtc = DateTimeOffset.UtcNow.Add(validFor) };
+    public void RegisterPending(string sessionId, string machineId, string agentPublicKey, TimeSpan validFor)
+        => _sessions[sessionId] = new RelaySession
+        {
+            MachineId = machineId,
+            AgentPublicKey = agentPublicKey,
+            ExpiresUtc = DateTimeOffset.UtcNow.Add(validFor)
+        };
 
     /// <summary>The id of an already-live-or-pending session for this machine, or null. Used to stop
     /// a second Remote click from stacking another session on a machine that already has one —
@@ -77,6 +84,15 @@ public sealed class RelayHub
         if (!_sessions.TryGetValue(sessionId, out var s)) return false;
         if (s.ExpiresUtc < DateTimeOffset.UtcNow) { _sessions.TryRemove(sessionId, out _); return false; }
         return machineId is null || string.Equals(s.MachineId, machineId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>True if this is a live session for this machine AND <paramref name="proof"/> is
+    /// that machine's signature over it. The session id alone is not enough: it sits in
+    /// commands.json, which every machine in the fleet can read.</summary>
+    public bool IsValidAgent(string sessionId, string machineId, string? proof)
+    {
+        if (!IsValid(sessionId, machineId) || !_sessions.TryGetValue(sessionId, out var s)) return false;
+        return RelaySignature.Verify(s.AgentPublicKey, s.MachineId, sessionId, proof);
     }
 
     /// <summary>Attach the operator's browser socket for this session. Blocks until the session ends.</summary>

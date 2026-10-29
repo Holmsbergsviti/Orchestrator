@@ -22,6 +22,11 @@ public sealed class GitRepo(string repoPath)
     public bool IsValid()
         => Directory.Exists(RepoPath) && TryRun(out _, out _, "rev-parse", "--is-inside-work-tree");
 
+    /// <summary>"author, relative time" of the last commit on <paramref name="refSpec"/> that
+    /// touched <paramref name="path"/>, or null.</summary>
+    public string? LastChange(string refSpec, string path)
+        => TryRun(out var o, out _, "log", "-1", "--format=%an, %ar", refSpec, "--", path) && !string.IsNullOrWhiteSpace(o) ? o.Trim() : null;
+
     /// <summary>Download the latest refs from the remote (no working-tree changes).</summary>
     public Task FetchAsync(string remote, CancellationToken ct)
         => RunAsync(ct, "fetch", remote, "--prune", "--quiet");

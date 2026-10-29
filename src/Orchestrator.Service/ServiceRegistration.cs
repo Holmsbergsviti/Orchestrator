@@ -52,6 +52,8 @@ public static class ServiceRegistration
         builder.Services.AddSingleton<IScreenshotService, ScreenshotService>();
         builder.Services.AddSingleton<IRemoteInputInjector, RemoteInputInjector>();
         builder.Services.AddSingleton<IRemoteSessionService, RemoteSessionService>();
+        builder.Services.AddSingleton<IRelayIdentity, RelayIdentity>();
+        builder.Services.AddSingleton<IControlFileVerifier, ControlFileVerifier>();
         builder.Services.AddSingleton<ISelfUpdateService, SelfUpdateService>();
     }
 

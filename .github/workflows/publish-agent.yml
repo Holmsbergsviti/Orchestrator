@@ -22,6 +22,8 @@ on:
     paths:
       - 'src/**'
       - 'defaults.json'
+      - 'scripts/install.ps1'        # embedded in the exe (InstalledScripts.cs), so a change is a new build
+      - 'scripts/update-agent.ps1'
       - 'Orchestrator.sln'
       - '.github/workflows/publish-agent.yml'
   workflow_dispatch:   # lets you republish by hand without an empty commit
@@ -61,10 +63,35 @@ jobs:
           }
           if ($bad) { exit 1 }
 
+      - name: Load the signing key
+        # The operator's signing key (made by the console's "signing-key" command). Its PUBLIC
+        # half is baked into the agent, which from then on refuses any manifest.json,
+        # commands.json or agent.json that isn't signed with it — so a GitHub token copied off
+        # one machine can't command the fleet. Without the secret the build doesn't enforce
+        # signing at all (same behaviour as before), and this step says so loudly.
+        id: signing
+        env:
+          AGENT_SIGNING_KEY: ${{ secrets.AGENT_SIGNING_KEY }}
+        run: |
+          if [ -z "$AGENT_SIGNING_KEY" ]; then
+            echo "::warning::AGENT_SIGNING_KEY is not set: this build does NOT enforce signed control files. See docs/SETUP.md, 'Sign the control files'."
+            echo "public_key=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$AGENT_SIGNING_KEY" > "$RUNNER_TEMP/signing-key.pem"
+          PUB=$(openssl ec -in "$RUNNER_TEMP/signing-key.pem" -pubout -outform DER 2>/dev/null | base64 -w0)
+          if [ -z "$PUB" ]; then echo "::error::AGENT_SIGNING_KEY isn't a readable EC private key."; exit 1; fi
+          echo "public_key=$PUB" >> "$GITHUB_OUTPUT"
+          echo "Signing with public key $PUB"
+
       - name: Publish the win-x64 agent
+        env:
+          SIGNING_PUBLIC_KEY: ${{ steps.signing.outputs.public_key }}
         run: |
           dotnet publish src/Orchestrator.Service/Orchestrator.Service.csproj \
-            -c Release -r win-x64 --self-contained true -o publish
+            -c Release -r win-x64 --self-contained true -o publish \
+            ${SIGNING_PUBLIC_KEY:+-p:OrchestratorSigningKey=$SIGNING_PUBLIC_KEY}
 
       - name: Compute the checksum
         id: hash
@@ -124,6 +151,23 @@ jobs:
               json.dump(release, f, indent=2)
               f.write("\n")
           PY
+          # Sign agent.json in the same format the console uses (see ControlFileVerifier.cs):
+          #   orchestrator-sign-v1\n<path>\n<signedUtc>\n<sha256 hex of the file>
+          # signed with ECDSA P-256 / SHA-256, DER, base64. Never older than the last signature,
+          # because agents refuse anything older than what they've already accepted.
+          if [ -f "$RUNNER_TEMP/signing-key.pem" ]; then
+            NOW=$(date -u +%s)
+            if [ -f agent.json.sig ]; then
+              PREV=$(python3 -c "import json,datetime;print(int(datetime.datetime.fromisoformat(json.load(open('agent.json.sig'))['signedUtc'].replace('Z','+00:00')).timestamp()))" 2>/dev/null || echo 0)
+              [ "$PREV" -ge "$NOW" ] && NOW=$((PREV + 1))
+            fi
+            SIGNED_UTC=$(date -u -d "@$NOW" +%Y-%m-%dT%H:%M:%SZ)
+            HASH=$(sha256sum agent.json | cut -d' ' -f1)
+            printf 'orchestrator-sign-v1\n%s\n%s\n%s' agent.json "$SIGNED_UTC" "$HASH" > "$RUNNER_TEMP/msg"
+            openssl dgst -sha256 -sign "$RUNNER_TEMP/signing-key.pem" -out "$RUNNER_TEMP/sig" "$RUNNER_TEMP/msg"
+            printf '{\n  "signedUtc": "%s",\n  "signature": "%s"\n}\n' "$SIGNED_UTC" "$(base64 -w0 "$RUNNER_TEMP/sig")" > agent.json.sig
+            git add agent.json.sig
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add agent.json
@@ -136,3 +180,8 @@ jobs:
           echo "### Agent published" >> "$GITHUB_STEP_SUMMARY"
           echo "SHA-256: \`${{ steps.hash.outputs.sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Every machine with AutoUpdate enabled will install this within one sync interval." >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ steps.signing.outputs.public_key }}" ]; then
+            echo "Signed control files: **enforced** by this build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Signed control files: **not enforced** (no AGENT_SIGNING_KEY secret)." >> "$GITHUB_STEP_SUMMARY"
+          fi

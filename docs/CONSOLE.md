@@ -55,6 +55,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:MainBranch` | Branch with `manifest.json` + `fleet.json` | `main` |
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
+| `Console:SigningKeyPath` | Your private signing key for [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended) | *(your user profile; made by `-- signing-key`)* |
 | `Urls` | Address the UI listens on | `http://localhost:5080` |
 
 ## Using it
@@ -89,12 +90,23 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   signed in there. Once uploaded (to `screenshots/<machineId>/` on the `fleet-state` branch,
   alongside the heartbeats), a **View** link appears next to the button to open the latest one.
 - **Remote** (Machines table, Power column) — starts a **live remote-control session**: opens a
-  viewer tab that shows that machine's screen at roughly 5 fps. Needs one-time setup on both
+  viewer tab that shows that machine's screen at up to ~15 fps. Needs one-time setup on both
   ends first (`Console:AccessToken` + a certificate here, `Orchestrator:RelayUrl` there) —
   see [SETUP.md](SETUP.md#7-optional-live-remote-control). Requirements and behaviour:
   - The session starts on the machine's **next sync**, so the viewer waits (with a countdown)
     for up to 15 minutes. Lower that machine's `SyncIntervalMinutes` for a faster start.
   - Someone must be **signed in** on the target — the capture runs in their desktop session.
+  - Only the **real** machine can take its session. Every machine can read `commands.json`, so
+    the session id alone isn't proof of anything: each agent has its own signing key (kept in
+    `cache\relay-key.pem`, readable by SYSTEM and Administrators only) and signs the session,
+    and the console checks that signature against the key it **pinned** the first time it saw
+    that machine. Pins live on the console's computer, not in git
+    (`%LOCALAPPDATA%\OrchestratorConsole\relay-keys.json`, or `~/.local/share/…` on macOS/Linux).
+  - If a machine's key changes, Remote is refused for it and a red **Trust new key** button
+    appears. That's expected after a **reinstall** (or if its `cache` folder was wiped) — press
+    it. If you didn't reinstall that machine, don't: a changed key is also exactly what another
+    machine posing as it looks like.
+  - A machine whose agent predates signing says so and can't take sessions until it updates.
   - A red **"Remote control active — click to end"** banner appears on the target for the whole
     session. It can't be turned off, and clicking it ends the session immediately — that
     override always wins over the console.

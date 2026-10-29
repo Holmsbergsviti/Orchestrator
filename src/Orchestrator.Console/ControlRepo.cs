@@ -31,6 +31,9 @@ public sealed class ConsoleOptions
     /// <summary>Path to a PFX certificate for HTTPS/WSS. REQUIRED if Urls binds non-locally.</summary>
     public string CertPfxPath { get; set; } = "";
     public string CertPfxPassword { get; set; } = "";
+    /// <summary>Where the operator's private signing key lives. Blank = per-user app data
+    /// (see ControlSigning.DefaultKeyPath). Never inside a repo.</summary>
+    public string SigningKeyPath { get; set; } = "";
 }
 
 // ---- wire models (what the web page receives / sends) --------------------------------
@@ -75,6 +78,10 @@ public sealed class MachineView
     public List<string> AppliedProgramIds { get; set; } = new();
     public string? Mac { get; set; }   // primary NIC MAC, for Wake-on-LAN
     public string? LastScreenshotUtc { get; set; }   // when the newest captured screenshot was taken, if any
+    /// <summary>Whether this machine can be trusted for remote control: "trusted", "missing"
+    /// (agent too old to sign), "changed" (key differs from the pinned one), or "error" (the
+    /// console couldn't read its pin file). Anything but "trusted" means Remote is refused.</summary>
+    public string RelayKey { get; set; } = "missing";
 }
 
 public sealed class StateResponse
@@ -88,6 +95,23 @@ public sealed class StateResponse
     public List<ProgramView> Programs { get; set; } = new();
     public List<MachineView> Machines { get; set; } = new();
     public List<string> Warnings { get; set; } = new();
+    /// <summary>Signed-mode status, so the page can offer "Sign" when it's needed.</summary>
+    public SigningView Signing { get; set; } = new();
+}
+
+public sealed class SigningView
+{
+    /// <summary>Whether this computer holds the operator's signing key.</summary>
+    public bool KeyPresent { get; set; }
+    /// <summary>Control files on main that aren't validly signed, with who changed them last.</summary>
+    public List<UnsignedFile> Unsigned { get; set; } = new();
+}
+
+public sealed class UnsignedFile
+{
+    public string Path { get; set; } = "";
+    public string State { get; set; } = "";        // "missing" | "invalid"
+    public string? LastChange { get; set; }        // "<author>, <when>" of the last commit touching it
 }
 
 public sealed class SaveRequest
@@ -209,6 +233,7 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("appliedProgramIds")] public List<string> AppliedProgramIds { get; set; } = new();
     [JsonPropertyName("lastError")] public string? LastError { get; set; }
     [JsonPropertyName("macAddresses")] public List<string> MacAddresses { get; set; } = new();
+    [JsonPropertyName("relayPublicKey")] public string? RelayPublicKey { get; set; }   // null = older agent
 }
 
 // ---- service -------------------------------------------------------------------------
@@ -241,13 +266,20 @@ public sealed class ControlRepo
     private readonly ConsoleOptions _opt;
     private readonly GitRepo _git;
     private readonly RelayHub _relay;
+    private readonly RelayKeyStore _keys;
+    private readonly ControlSigning _signing;
     private readonly ILogger<ControlRepo> _log;
 
-    public ControlRepo(ConsoleOptions opt, RelayHub relay, ILogger<ControlRepo> log)
+    /// <summary>The files agents refuse unless signed (agent.json too, but CI signs that one).</summary>
+    private static readonly string[] SignedFiles = { ManifestPath, "commands.json" };
+
+    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, ILogger<ControlRepo> log)
     {
+        _signing = signing;
         _opt = opt;
         _git = new GitRepo(opt.ControlRepoPath);
         _relay = relay;
+        _keys = keys;
         _log = log;
     }
 
@@ -287,12 +319,13 @@ public sealed class ControlRepo
             resp.Warnings.Add($"No machines have reported yet (branch '{_opt.FleetStateBranch}' is empty or missing).");
 
         resp.Machines = heartbeats
-            .Select(hb => ToMachineView(hb, labels, ReadLatestScreenshotMeta(hb.MachineId)))
+            .Select(hb => ToMachineView(hb, labels, ReadLatestScreenshotMeta(hb.MachineId), CheckRelayKey(hb, resp.Warnings)))
             .OrderByDescending(m => m.Online)
             .ThenBy(m => m.Label ?? m.Hostname, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         resp.Programs = programNodes.Select(ToProgramView).ToList();
+        resp.Signing = ReadSigningStatus(resp.Warnings);
         return resp;
     }
 
@@ -334,8 +367,7 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(
-                _opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: update programs/targeting/labels ({DateTimeOffset.UtcNow:u})",
                 new[] { ManifestPath, FleetLabelsPath }, ct);
             return new SaveResult { Ok = true, Message = "Saved and pushed.", Commit = sha };
@@ -428,8 +460,8 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(
-                _opt.Remote, _opt.MainBranch, $"console: add program {id} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
+            var sha = await CommitSignedAsync(
+                $"console: add program {id} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
             return new SaveResult { Ok = true, Message = $"Added {id}.", Commit = sha };
         }
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
@@ -459,7 +491,7 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: run-now {programId} ({DateTimeOffset.UtcNow:u})", new[] { ManifestPath }, ct);
             return new SaveResult { Ok = true, Message = $"Run-now requested — it runs on each targeted machine's next sync.", Commit = sha };
         }
@@ -512,7 +544,7 @@ public sealed class ControlRepo
         if (_git.IsClean()) return new SaveResult { Ok = true, Message = "Nothing to delete.", Commit = null };
         try
         {
-            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: delete program {programId} ({DateTimeOffset.UtcNow:u})", toCommit, ct);
             return new SaveResult { Ok = true, Message = "Deleted — machines uninstall it on their next sync.", Commit = sha };
         }
@@ -546,7 +578,7 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: {action} {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
             return new SaveResult { Ok = true, Message = $"{action} sent — runs on the machine's next sync (~1 cycle, 15s delay).", Commit = sha };
         }
@@ -594,7 +626,7 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: wake {wake.Count} machine(s) ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
             var msg = $"Wake queued for {wake.Count} machine(s) — the waker sends the packets on its next sync.";
             if (missing > 0) msg += $" ({missing} skipped: no MAC reported yet.)";
@@ -628,7 +660,7 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: screenshot {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
             return new SaveResult { Ok = true, Message = "Screenshot requested — captured on the machine's next sync (needs a logged-on user).", Commit = sha };
         }
@@ -668,6 +700,15 @@ public sealed class ControlRepo
         var err = await PrepareCleanMainAsync(ct);
         if (err is not null) return new RemoteSessionResult { Ok = false, Message = err };
 
+        // Only a machine whose signing key we trust can take a session: the session id below is
+        // readable by every machine, so the key is what stops one of them answering for another.
+        var hb = ReadHeartbeats().FirstOrDefault(h => string.Equals(h.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
+        if (hb is null) return new RemoteSessionResult { Ok = false, Message = "That machine hasn't reported a heartbeat yet." };
+        var keyStatus = CheckRelayKey(hb, warnings: null);
+        if (keyStatus != "trusted")
+            return new RemoteSessionResult { Ok = false, Message = RelayKeyRefusal(keyStatus) };
+        var agentKey = hb.RelayPublicKey!;
+
         var sessionId = Guid.NewGuid().ToString("N");
         var requestedUtc = DateTimeOffset.UtcNow;
         // How long the agent may take to NOTICE the request (it only looks once per sync). Past
@@ -692,14 +733,14 @@ public sealed class ControlRepo
 
         try
         {
-            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+            var sha = await CommitSignedAsync(
                 $"console: remote-session {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
             // Derive this from expiresUtc rather than hardcoding it: the viewer shows this
             // deadline as a countdown, so a window longer than the agent's own pickup window
             // would leave it counting down long after the agent discarded the request as stale.
             // The grace covers the agent connecting AFTER it picks the request up (its one-time
             // task fires ~15s later, then has to reach the relay).
-            _relay.RegisterPending(sessionId, machineId, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace);
+            _relay.RegisterPending(sessionId, machineId, agentKey, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace);
             return new RemoteSessionResult
             {
                 Ok = true,
@@ -711,17 +752,130 @@ public sealed class ControlRepo
         catch (GitException ex) { return new RemoteSessionResult { Ok = false, Message = $"Commit/push failed: {ex.Message}" }; }
     }
 
+    /// <summary>Why a machine can't take a remote session, in words that name the fix.</summary>
+    private string RelayKeyRefusal(string status) => status switch
+    {
+        "changed" => "This machine's remote-control key has changed since the console first saw it. That's expected after a " +
+                     "reinstall, but it's also what an impersonating machine looks like. If you reinstalled it, press \"Trust new key\".",
+        "error" => $"The console couldn't read its remote-control key pins ({_keys.FilePath}). Fix or delete that file.",
+        _ => "This machine hasn't reported a remote-control key yet. Its agent is older than this console; it picks up " +
+             "the new build on a coming sync, then Remote works."
+    };
+
+    /// <summary>Accept a machine's current (changed) key as genuine — the operator's call, after a
+    /// reinstall. Reads the key fresh from the heartbeat so it's the one the machine reports now.</summary>
+    public async Task<RemoteSessionResult> TrustRelayKeyAsync(string machineId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(machineId)) return new RemoteSessionResult { Ok = false, Message = "Machine id is required." };
+        await _git.FetchAsync(_opt.Remote, ct);
+        var hb = ReadHeartbeats().FirstOrDefault(h => string.Equals(h.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
+        if (hb is null || string.IsNullOrWhiteSpace(hb.RelayPublicKey))
+            return new RemoteSessionResult { Ok = false, Message = "That machine isn't reporting a key to trust." };
+        try { _keys.Trust(hb.MachineId, hb.RelayPublicKey); }
+        catch (InvalidOperationException ex) { return new RemoteSessionResult { Ok = false, Message = ex.Message }; }
+        return new RemoteSessionResult { Ok = true, Message = "New key trusted. Remote control works for this machine again." };
+    }
+
     // ---- edit helpers ------------------------------------------------------------------
 
-    /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.</summary>
-    private async Task<string?> PrepareCleanMainAsync(CancellationToken ct)
+    /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.
+    /// With a signing key present it also refuses to build on top of a control file that isn't
+    /// validly signed: the console signs the WHOLE file it saves, so editing one that someone
+    /// else changed would sign their change too — exactly what signing exists to prevent.</summary>
+    private async Task<string?> PrepareCleanMainAsync(CancellationToken ct, bool requireSigned = true)
     {
         await _git.FetchAsync(_opt.Remote, ct);
         if (!_git.IsClean())
             return "The control-repo clone has uncommitted changes. Commit or discard them, then retry.";
         try { await _git.SyncBranchToRemoteAsync(_opt.Remote, _opt.MainBranch, ct); }
         catch (GitException ex) { return $"Could not fast-forward '{_opt.MainBranch}' to the remote: {ex.Message}"; }
+        if (requireSigned && _signing.HasKey && ReadSigningStatus(null).Unsigned.FirstOrDefault() is { } u)
+            return $"{u.Path} has changes that aren't signed ({(u.LastChange is null ? "" : "last changed by " + u.LastChange + "; ")}" +
+                   "made outside this console, or by another key). Check that change on GitHub; if it's yours, press Sign, then retry.";
         return null;
+    }
+
+    /// <summary>Which signed control files on main aren't validly signed by our key. Adds page
+    /// warnings when given a list.</summary>
+    private SigningView ReadSigningStatus(List<string>? warnings)
+    {
+        var view = new SigningView { KeyPresent = _signing.HasKey };
+        if (!_signing.HasKey)
+        {
+            warnings?.Add("Control files aren't being signed: this computer has no signing key, so a GitHub token copied from any " +
+                "machine could change what the whole fleet runs. Set it up once: docs/SETUP.md, \"Sign the control files\".");
+            return view;
+        }
+        foreach (var path in SignedFiles)
+        {
+            var content = _git.ReadFileBytesFromRef(MainRef, path);
+            if (content is null) continue;   // e.g. no commands.json yet: nothing to sign
+            var state = _signing.Check(path, content, _git.ReadFileBytesFromRef(MainRef, path + ".sig"));
+            if (state == SignatureState.Valid) continue;
+            view.Unsigned.Add(new UnsignedFile
+            {
+                Path = path,
+                State = state == SignatureState.Missing ? "missing" : "invalid",
+                LastChange = _git.LastChange(MainRef, path)
+            });
+        }
+        if (warnings is not null && view.Unsigned.Count > 0)
+            warnings.Add($"Not signed: {string.Join(", ", view.Unsigned.Select(u => u.Path + (u.LastChange is null ? "" : $" (last changed by {u.LastChange})")))}. " +
+                "Machines ignore these until they're signed. If the change is yours, press Sign; if not, someone else is editing your control repo.");
+        return view;
+    }
+
+    /// <summary>Stage, sign (when we have a key), commit and push. Signs each control file in
+    /// <paramref name="paths"/> whose content or signature differs from main, so the commit
+    /// carries the .sig the agents will check.</summary>
+    private async Task<string> CommitSignedAsync(string message, IEnumerable<string> paths, CancellationToken ct)
+    {
+        var all = paths.ToList();
+        if (_signing.HasKey)
+        {
+            foreach (var path in SignedFiles.Where(f => all.Contains(f)))
+            {
+                var full = Path.Combine(_opt.ControlRepoPath, path);
+                if (!File.Exists(full)) continue;
+                var content = File.ReadAllBytes(full);
+                var sigOnMain = _git.ReadFileBytesFromRef(MainRef, path + ".sig");
+                var onMain = _git.ReadFileBytesFromRef(MainRef, path);
+                if (onMain is not null && onMain.AsSpan().SequenceEqual(content)
+                    && _signing.Check(path, content, sigOnMain) == SignatureState.Valid)
+                    continue;   // unchanged and already signed: leave its signature alone
+                File.WriteAllBytes(full + ".sig", _signing.Sign(path, content, sigOnMain));
+                all.Add(path + ".sig");
+            }
+        }
+        return await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch, message, all, ct);
+    }
+
+    /// <summary>The operator vouches for the control files exactly as they are on main now
+    /// (after a hand edit, or the first time signing is set up), and signs them.</summary>
+    public async Task<SaveResult> SignNowAsync(CancellationToken ct)
+    {
+        if (!_signing.HasKey) return new SaveResult { Ok = false, Message = "This computer has no signing key — see docs/SETUP.md, \"Sign the control files\"." };
+        var err = await PrepareCleanMainAsync(ct, requireSigned: false);
+        if (err is not null) return new SaveResult { Ok = false, Message = err };
+
+        var toSign = new List<string>();
+        foreach (var path in SignedFiles)
+        {
+            var full = Path.Combine(_opt.ControlRepoPath, path);
+            if (!File.Exists(full)) continue;
+            var content = File.ReadAllBytes(full);
+            if (_signing.Check(path, content, File.Exists(full + ".sig") ? File.ReadAllBytes(full + ".sig") : null) == SignatureState.Valid) continue;
+            File.WriteAllBytes(full + ".sig", _signing.Sign(path, content, File.Exists(full + ".sig") ? File.ReadAllBytes(full + ".sig") : null));
+            toSign.Add(path + ".sig");
+        }
+        if (toSign.Count == 0) return new SaveResult { Ok = true, Message = "Everything is already signed." };
+        try
+        {
+            var sha = await _git.CommitAndPushAsync(_opt.Remote, _opt.MainBranch,
+                $"console: sign {string.Join(", ", toSign.Select(p => p[..^4]))} ({DateTimeOffset.UtcNow:u})", toSign, ct);
+            return new SaveResult { Ok = true, Message = $"Signed {string.Join(", ", toSign.Select(p => p[..^4]))}.", Commit = sha };
+        }
+        catch (GitException ex) { return new SaveResult { Ok = false, Message = $"Commit/push failed: {ex.Message}" }; }
     }
 
     /// <summary>
@@ -884,7 +1038,27 @@ public sealed class ControlRepo
         _ => null
     };
 
-    private static MachineView ToMachineView(HeartbeatFile hb, Dictionary<string, string> labels, ScreenshotMeta? shot)
+    /// <summary>Pin-or-compare this machine's remote-control key (see RelayKeyStore). A pin file
+    /// the console can't read is reported once as a page warning rather than breaking the page.</summary>
+    private string CheckRelayKey(HeartbeatFile hb, List<string>? warnings)
+    {
+        try
+        {
+            return _keys.Check(hb.MachineId, hb.RelayPublicKey) switch
+            {
+                RelayKeyStatus.Trusted => "trusted",
+                RelayKeyStatus.Changed => "changed",
+                _ => "missing"
+            };
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (warnings is not null && !warnings.Contains(ex.Message)) warnings.Add(ex.Message);
+            return "error";
+        }
+    }
+
+    private static MachineView ToMachineView(HeartbeatFile hb, Dictionary<string, string> labels, ScreenshotMeta? shot, string relayKey)
     {
         labels.TryGetValue(hb.MachineId, out var label);
         return new MachineView
@@ -902,7 +1076,8 @@ public sealed class ControlRepo
             LastError = hb.LastError,
             AppliedProgramIds = hb.AppliedProgramIds,
             Mac = hb.MacAddresses.FirstOrDefault(),
-            LastScreenshotUtc = shot?.CapturedUtc
+            LastScreenshotUtc = shot?.CapturedUtc,
+            RelayKey = relayKey
         };
     }
 

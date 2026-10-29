@@ -33,6 +33,8 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly ISelfUpdateService _selfUpdate;    // keeps the agent's own binary current
     private readonly IConfigService _configService;     // config + machine state
     private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
+    private readonly IRelayIdentity _relayIdentity;     // signs remote sessions so the relay knows it's really us
+    private readonly IControlFileVerifier _verifier;    // whether signed mode (mandatory checksums) is on
     private readonly ILogger<SyncService> _log;         // logger
     private readonly OrchestratorConfig _config;        // our settings
 
@@ -45,6 +47,8 @@ public sealed class SyncService : ISyncService   // the actual implementation
         ISelfUpdateService selfUpdate,
         IConfigService configService,
         IFleetReporter fleetReporter,
+        IRelayIdentity relayIdentity,
+        IControlFileVerifier verifier,
         ILogger<SyncService> log)   // all dependencies handed in by DI
     {
         _github = github;                   // store each collaborator
@@ -55,6 +59,8 @@ public sealed class SyncService : ISyncService   // the actual implementation
         _selfUpdate = selfUpdate;
         _configService = configService;
         _fleetReporter = fleetReporter;
+        _relayIdentity = relayIdentity;
+        _verifier = verifier;
         _config = configService.Config;     // grab the settings for convenience
         _log = log;
     }
@@ -74,7 +80,10 @@ public sealed class SyncService : ISyncService   // the actual implementation
             if (remote is null)   // download/parse failed?
             {
                 record.Success = false;                                             // mark this cycle as failed
-                record.Errors.Add("Manifest fetch failed; keeping current state."); // note why
+                // Say WHY when it's a signature refusal: that's the one the operator has to act on.
+                record.Errors.Add(_github.LastRejection is { } why
+                    ? $"Manifest refused: {why}"
+                    : "Manifest fetch failed; keeping current state.");
                 _log.LogWarning("Manifest unavailable — skipping cycle, will retry next interval");
                 // Fall through to reporting/Finish so the heartbeat still shows this machine is alive.
             }
@@ -192,6 +201,12 @@ public sealed class SyncService : ISyncService   // the actual implementation
             ? $"Updating {p.Name} v{action.PreviousVersion} -> v{p.Version}"   // nicer wording for updates
             : $"Installing {p.Name} v{p.Version}";                            // vs. fresh installs
         _log.LogInformation("{Verb}", verb);
+
+        // With signing on, the manifest's checksum is the ONLY thing vouching for the file: the
+        // binary itself sits in the repo, where a copied token could replace it.
+        if (_verifier.Enforced && p.NormalizedChecksum is null)
+            throw new InvalidOperationException(
+                $"{p.Name} has no checksum in the manifest, and signed mode requires one. Re-add it from the console (it computes one).");
 
         var bytes = await _github.DownloadFileAsync(p, ct);   // download the file from GitHub
         _log.LogInformation("Downloaded {Kb:N1} KB", bytes.Length / 1024.0);
@@ -381,10 +396,21 @@ public sealed class SyncService : ISyncService   // the actual implementation
 
             var nowUtc = DateTimeOffset.UtcNow;
             var expired = DateTimeOffset.TryParse(session.ExpiresUtc, out var expiresUtc) && expiresUtc < nowUtc;
-            if (!expired)
+            // The id is about to land on a scheduled task's command line, and it came from the
+            // repo — so it has to look exactly like what the console generates, or it's dropped.
+            if (!RelayProof.IsWellFormedSessionId(session.Id))
+                _log.LogWarning("remote-session request with a malformed id ignored");
+            else if (!expired)
+            {
+                // Signed HERE, by the service, because only SYSTEM can read the key. The session
+                // process just carries the signature to the relay (see RelayIdentity).
+                var proof = _relayIdentity.Sign(machine.MachineId, session.Id);
+                if (proof is null)
+                    _log.LogWarning("remote-session '{Id}': no relay signing key on this machine; the console will refuse the session", session.Id);
                 // Size the task's kill-switch for a fully renewed session, not a single grant —
                 // otherwise Task Scheduler would terminate a session the operator legitimately extended.
-                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, _config.RemoteSessionAbsoluteMax);
+                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, proof, _config.RemoteSessionAbsoluteMax);
+            }
             else
                 // Print BOTH clocks. The usual cause isn't a slow sync, it's this machine's clock
                 // disagreeing with the console's about what time it is in UTC — which is invisible

@@ -21,21 +21,25 @@
   <title>Orchestrator — Remote control</title>
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; background: #111827; color: #e5e7eb; font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-           height: 100vh; display: flex; flex-direction: column; }
-    header { padding: 10px 16px; background: #1f2937; display: flex; align-items: center; gap: 12px; }
-    header h1 { font-size: 14px; margin: 0; font-weight: 600; }
-    header .status { color: #9ca3af; font-size: 12px; }
+    /* Header and messages match the console's green-on-black terminal look; the screen
+       itself is left untouched — nothing is drawn over the remote picture. */
+    body { margin: 0; background: #020803; color: #b8ffcc; font: 13px/1.5 ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+           height: 100vh; display: flex; flex-direction: column; color-scheme: dark; }
+    header { padding: 9px 16px; background: #010a04; border-bottom: 1px solid #0f3d1f; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 13px; margin: 0; font-weight: 700; color: #00ff66; text-transform: uppercase; letter-spacing: .08em;
+                text-shadow: 0 0 6px rgba(0, 255, 102, .55); }
+    header h1::before { content: '> '; color: #4f9e66; }
+    header .status { color: #4f9e66; font-size: 12px; }
     header .spacer { flex: 1; }
-    button { font: inherit; border: 1px solid #374151; background: #111827; color: #e5e7eb;
-             padding: 6px 12px; border-radius: 6px; cursor: pointer; }
-    button:hover { border-color: #4b5563; }
+    button { font: inherit; border: 1px solid #0f3d1f; background: #000; color: #b8ffcc;
+             padding: 5px 12px; border-radius: 3px; cursor: pointer; }
+    button:hover { border-color: #00ff66; color: #00ff66; box-shadow: 0 0 6px rgba(0, 255, 102, .55); }
     main { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #000; }
     canvas { max-width: 100%; max-height: 100%; }
-    .msg { color: #9ca3af; font-size: 13px; padding: 0 20px; text-align: center; max-width: 640px; }
-    .msg h2 { font-size: 14px; color: #e5e7eb; margin: 0 0 8px; font-weight: 600; }
+    .msg { color: #4f9e66; font-size: 13px; padding: 0 20px; text-align: center; max-width: 640px; }
+    .msg h2 { font-size: 13px; color: #00ff66; margin: 0 0 8px; font-weight: 600; }
     .msg ul { text-align: left; margin: 12px 0 0; padding-left: 20px; line-height: 1.7; }
-    .msg code { background: #1f2937; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    .msg code { background: rgba(0, 255, 102, .08); color: #00ff66; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -168,7 +172,7 @@
 
       ws.onerror = () => { if (opened) statusEl.textContent = 'Connection error'; };
 
-      ws.onmessage = async (ev) => {
+      ws.onmessage = (ev) => {
         // Text = a control message (relay status, or the agent's deadline); binary = a frame.
         if (typeof ev.data === 'string') {
           let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -192,21 +196,43 @@
           return;
         }
         if (!(ev.data instanceof ArrayBuffer)) return;
-        const blob = new Blob([ev.data], { type: 'image/jpeg' });
-        const bitmap = await createImageBitmap(blob);
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-        }
-        ctx.drawImage(bitmap, 0, 0);
-        bitmap.close();
-        if (canvas.hidden) {
-          if (countdown) { clearInterval(countdown); countdown = null; }
-          canvas.hidden = false;
-          waitingEl.hidden = true;
-          statusEl.textContent = 'Live';
-        }
+        // Only ever decode the NEWEST frame. Decoding is async, so starting one per message
+        // let several run at once and finish in any order — an older frame could be drawn
+        // over a newer one (visible as stutter), and a tab that couldn't keep up fell further
+        // and further behind. Now a frame that arrives mid-decode just replaces the one
+        // waiting its turn, and anything older than that is dropped unseen.
+        pendingFrame = ev.data;
+        if (!decoding) drawFrames();
       };
+
+      let pendingFrame = null;   // the latest frame not yet drawn
+      let decoding = false;      // true while drawFrames is working through pendingFrame
+      async function drawFrames() {
+        decoding = true;
+        try {
+          while (pendingFrame) {
+            const data = pendingFrame;
+            pendingFrame = null;
+            let bitmap;
+            try { bitmap = await createImageBitmap(new Blob([data], { type: 'image/jpeg' })); }
+            catch { continue; }   // one undecodable frame shouldn't stop the stream
+            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+              canvas.width = bitmap.width;
+              canvas.height = bitmap.height;
+            }
+            ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+            if (canvas.hidden) {
+              if (countdown) { clearInterval(countdown); countdown = null; }
+              canvas.hidden = false;
+              waitingEl.hidden = true;
+              statusEl.textContent = 'Live';
+            }
+          }
+        } finally {
+          decoding = false;
+        }
+      }
 
       // ---- input capture (mouse + keyboard -> the remote machine) --------------------
       // Positions go out as FRACTIONS of the canvas, never pixels: the canvas holds a
@@ -227,7 +253,7 @@
       const BUTTONS = { 0: 'left', 1: 'middle', 2: 'right' };
 
       canvas.addEventListener('mousemove', (ev) => {
-        // ~60/s is plenty for a 5 fps view and keeps one flick of the wrist from queueing
+        // ~60/s is plenty for a ~15 fps view and keeps one flick of the wrist from queueing
         // hundreds of messages behind a slow link.
         const now = performance.now();
         if (now - lastMoveSent < 16) return;

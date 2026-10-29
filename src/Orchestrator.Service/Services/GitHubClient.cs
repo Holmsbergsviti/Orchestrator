@@ -17,8 +17,13 @@ namespace Orchestrator.Service.Services;   // groups this with the other service
 
 public interface IGitHubClient   // the contract for GitHub access
 {
-    /// <summary>Fetch and deserialize the remote manifest. Returns null on network/parse failure.</summary>
+    /// <summary>Fetch and deserialize the remote manifest. Returns null on network/parse failure,
+    /// or when its signature is refused (see <see cref="LastRejection"/>).</summary>
     Task<Manifest?> GetManifestAsync(CancellationToken ct = default);
+
+    /// <summary>Why the most recent manifest/commands/agent.json fetch was refused on signature
+    /// grounds, or null. Surfaced in the sync record so the console shows it per machine.</summary>
+    string? LastRejection { get; }
 
     /// <summary>Fetch and deserialize commands.json (admin commands). Null if missing/unreadable.</summary>
     Task<CommandFile?> GetCommandsAsync(CancellationToken ct = default);
@@ -43,6 +48,9 @@ public interface IGitHubClient   // the contract for GitHub access
 /// <summary>Thrown when GitHub rejects a write (401/403) — usually the token lacks write access.</summary>
 public sealed class GitHubWriteForbiddenException(string message) : Exception(message);
 
+/// <summary>Thrown when a control file's signature is refused (see ControlFileVerifier).</summary>
+public sealed class ControlFileRejectedException(string message) : Exception(message);
+
 /// <summary>
 /// Talks to the GitHub Contents API with the "raw" media type so it works for
 /// private repositories using a PAT. Files can be addressed by an explicit
@@ -59,14 +67,17 @@ public sealed class GitHubClient : IGitHubClient
 
     private readonly IHttpClientFactory _httpFactory;   // creates the shared, pre-configured HttpClient
     private readonly OrchestratorConfig _config;        // our settings (owner/repo/branch)
+    private readonly IControlFileVerifier _verifier;    // refuses control files the operator didn't sign
     private readonly ILogger<GitHubClient> _log;        // logger
 
     public GitHubClient(
         IHttpClientFactory httpFactory,
         IConfigService configService,
+        IControlFileVerifier verifier,
         ILogger<GitHubClient> log)   // dependencies from DI
     {
         _httpFactory = httpFactory;         // store the client factory
+        _verifier = verifier;               // store the signature checker
         _config = configService.Config;     // grab the settings
         _log = log;                         // store the logger
     }
@@ -75,8 +86,13 @@ public sealed class GitHubClient : IGitHubClient
     {
         try
         {
-            var bytes = await GetContentsRawAsync(_config.ManifestPath, ct);   // download the manifest file bytes
+            var bytes = await GetVerifiedAsync(_config.ManifestPath, ct);      // download + check the signature
             return JsonSerializer.Deserialize<Manifest>(bytes, JsonOpts);      // parse them into a Manifest object
+        }
+        catch (ControlFileRejectedException ex)
+        {
+            _log.LogError("Refusing the manifest: {Reason}", ex.Message);    // nothing in it gets installed or removed
+            return null;
         }
         catch (Exception ex)
         {
@@ -90,12 +106,17 @@ public sealed class GitHubClient : IGitHubClient
     {
         try
         {
-            var bytes = await GetContentsRawAsync("commands.json", ct);   // admin commands file (optional)
+            var bytes = await GetVerifiedAsync("commands.json", ct);   // admin commands file (optional)
             return JsonSerializer.Deserialize<CommandFile>(bytes, JsonOpts);
         }
         catch (FileNotFoundException)
         {
             return null;   // no commands.json in the repo -> nothing to do (normal)
+        }
+        catch (ControlFileRejectedException ex)
+        {
+            _log.LogError("Refusing commands.json: {Reason}", ex.Message);   // no restart, wake, screenshot or session runs
+            return null;
         }
         catch (Exception ex)
         {
@@ -108,18 +129,43 @@ public sealed class GitHubClient : IGitHubClient
     {
         try
         {
-            var bytes = await GetContentsRawAsync("agent.json", ct);   // optional file in the control repo
+            var bytes = await GetVerifiedAsync("agent.json", ct);   // optional file in the control repo
             return JsonSerializer.Deserialize<AgentRelease>(bytes, JsonOpts);
         }
         catch (FileNotFoundException)
         {
             return null;   // no agent.json -> self-update simply isn't set up (normal)
         }
+        catch (ControlFileRejectedException ex)
+        {
+            _log.LogError("Refusing agent.json: {Reason}", ex.Message);   // stay on the current build
+            return null;
+        }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Could not fetch agent.json");   // non-fatal: keep running the current build
             return null;
         }
+    }
+
+    public string? LastRejection { get; private set; }
+
+    /// <summary>Download a control file and, when signing is enforced, its .sig — refusing the
+    /// file unless the operator's signature checks out. Program binaries don't come through
+    /// here: they're pinned by the SHA-256 in the (signed) manifest instead.</summary>
+    private async Task<byte[]> GetVerifiedAsync(string path, CancellationToken ct)
+    {
+        var bytes = await GetContentsRawAsync(path, ct);
+        if (!_verifier.Enforced) return bytes;
+
+        byte[]? sig;
+        try { sig = await GetContentsRawAsync(ControlSignature.SignaturePath(path), ct); }
+        catch (FileNotFoundException) { sig = null; }
+
+        var reason = _verifier.Check(path, bytes, sig);
+        LastRejection = reason;
+        if (reason is not null) throw new ControlFileRejectedException(reason);
+        return bytes;
     }
 
     public Task<byte[]> DownloadFileAsync(ProgramEntry program, CancellationToken ct = default)

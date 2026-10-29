@@ -55,6 +55,7 @@ public sealed class FleetReporter : IFleetReporter
     private readonly IGitHubClient _github;
     private readonly IManifestService _manifests;
     private readonly IConfigService _configService;
+    private readonly IRelayIdentity _relayIdentity;   // supplies the public key the console pins
     private readonly ILogger<FleetReporter> _log;
     private readonly OrchestratorConfig _config;
 
@@ -62,8 +63,10 @@ public sealed class FleetReporter : IFleetReporter
         IGitHubClient github,
         IManifestService manifests,
         IConfigService configService,
+        IRelayIdentity relayIdentity,
         ILogger<FleetReporter> log)
     {
+        _relayIdentity = relayIdentity;
         _github = github;
         _manifests = manifests;
         _configService = configService;
@@ -97,7 +100,8 @@ public sealed class FleetReporter : IFleetReporter
                 ManifestVersion = record.ManifestVersion,
                 AppliedProgramIds = applied,
                 LastError = record.Errors.Count > 0 ? record.Errors[0] : null,
-                MacAddresses = GetMacAddresses()
+                MacAddresses = GetMacAddresses(),
+                RelayPublicKey = _relayIdentity.PublicKey
             };
 
             var last = LoadLastHeartbeat();   // the last one we committed (if any)

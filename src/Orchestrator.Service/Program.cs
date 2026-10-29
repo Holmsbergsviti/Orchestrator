@@ -167,7 +167,7 @@ static int RunRemoteSession(string[] args)
     var id = args.Length > 1 ? args[1] : null;
     if (string.IsNullOrWhiteSpace(id))
     {
-        Console.Error.WriteLine("usage: remote-session <sessionId>");
+        Console.Error.WriteLine("usage: remote-session <sessionId> [proof]");
         return 2;
     }
     try
@@ -182,7 +182,8 @@ static int RunRemoteSession(string[] args)
 
         using var host = builder.Build();
         var session = host.Services.GetRequiredService<IRemoteSessionService>();
-        return session.RunAsync(id, CancellationToken.None).GetAwaiter().GetResult();
+        var proof = args.Length > 2 ? args[2] : null;   // the service's signature for this session (see RelayIdentity)
+        return session.RunAsync(id, proof, CancellationToken.None).GetAwaiter().GetResult();
     }
     catch (Exception ex)
     {

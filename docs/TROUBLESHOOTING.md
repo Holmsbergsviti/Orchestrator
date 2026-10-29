@@ -27,6 +27,19 @@ The downloaded bytes don't match the manifest hash.
 - File replaced in the repo without bumping the checksum.
 The install is skipped and retried next cycle; nothing corrupt is written.
 
+## `Manifest refused: ...` / `Refusing commands.json` / `Refusing agent.json`
+Signed control files are on, and the file isn't signed by your key. The reason says which case:
+- *"isn't signed"* / *"doesn't match its signature"* — it was edited outside the console. Open
+  the console: it lists the file and who changed it last. If that was you, press **Sign**. If it
+  wasn't, someone with a fleet machine's token is editing your repo — revert their commit and
+  rotate the machines' token.
+- *"signed with another key"* — the console's key and the `AGENT_SIGNING_KEY` secret differ
+  (e.g. you made a new key on another computer). Put the same key in both, then Sign.
+- *"older than the ... version already applied here"* — an old, genuinely signed file was put
+  back. The machine keeps the newer one it has; sign the file you actually want.
+- *"has no checksum ... signed mode requires one"* — re-add the program from the console, or
+  add `"checksum"` (see ADDING-PROGRAMS.md) and Sign.
+
 ## `GitHub path not found`
 The `path`/`url` in the manifest doesn't resolve.
 - Check the repo-relative `path` is exact (case-sensitive).
@@ -97,7 +110,18 @@ a session long after you asked for one. Just press **Remote** again.
   new thumbprint). Re-copy it.
 - *"couldn't reach the console"* → the console isn't running, is still bound to `localhost`,
   or the port is blocked. `Urls` must be `https://0.0.0.0:<port>`, not `localhost`.
-- *"rejected this session token"* → the console restarted after you pressed Remote. Press it again.
+- *"rejected this session"* → either the console restarted after you pressed Remote (press it
+  again), or it doesn't recognise this machine's signing key — see the next item.
+
+**Remote says the machine's key "has changed" / shows "Trust new key"** — the machine reports a
+different remote-control key than the one the console pinned. After a reinstall, or if
+`C:\Windows\Orch\cache` was cleared, that's expected: press **Trust new key**. If neither
+happened, treat it as a machine trying to impersonate another and check the console log for
+`relay: refused agent connection`.
+
+**Remote says the machine "hasn't reported a remote-control key yet"** — its agent is older than
+the console. It updates itself on a coming sync; if it doesn't, check its log for `self-update:`
+and `relay identity:`.
 
 **"This console doesn't recognise the session"** — same cause: pending sessions are held in
 memory only, so a console restart cancels them.

@@ -36,6 +36,9 @@ interval (default 60 min).
    }
    ```
 4. Commit + push.
+5. If you've set up [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended),
+   open the console and press **Sign** — machines ignore an unsigned `manifest.json`. (Adding
+   the program from the console instead does all of this, checksum included.)
 
 ### `path` vs `url`
 Prefer **`path`** (repo-relative) — the service resolves it through the GitHub Contents

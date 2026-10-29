@@ -20,6 +20,27 @@ using Microsoft.AspNetCore.Authentication;          // AuthenticationProperties
 using Microsoft.AspNetCore.Authentication.Cookies;  // cookie auth scheme
 using Orchestrator.Console;                         // ConsoleOptions / ControlRepo / ConsoleAuth
 
+// "signing-key": one-time setup for signed control files. Creates the operator's signing key
+// on this computer (or shows the existing one) and prints what goes into the code repo's
+// AGENT_SIGNING_KEY secret. Then exits; it doesn't start the console.
+if (args.Length > 0 && args[0] == "signing-key")
+{
+    var signing = new ControlSigning(args.Length > 1 ? args[1] : ControlSigning.DefaultKeyPath);
+    var (pem, created) = signing.LoadOrCreate();
+    System.Console.WriteLine(created ? $"Created a signing key at {signing.KeyPath}" : $"Using the existing signing key at {signing.KeyPath}");
+    System.Console.WriteLine();
+    System.Console.WriteLine("1. Copy EVERYTHING between the lines below (including the BEGIN/END lines).");
+    System.Console.WriteLine("2. In the code repo on GitHub: Settings > Secrets and variables > Actions > New repository secret.");
+    System.Console.WriteLine("   Name: AGENT_SIGNING_KEY   Secret: paste it.");
+    System.Console.WriteLine("3. Back up the key file above somewhere safe. Anyone who has it can command your fleet;");
+    System.Console.WriteLine("   if you lose it, run this again on a new computer and replace the secret.");
+    System.Console.WriteLine();
+    System.Console.WriteLine("----------------------------------------------------------------");
+    System.Console.Write(pem.EndsWith('\n') ? pem : pem + "\n");
+    System.Console.WriteLine("----------------------------------------------------------------");
+    return 0;
+}
+
 // A first bare argument (not a --switch) is a convenience for the repo path. Pull it out
 // BEFORE handing args to the config system — on macOS/Linux a path starts with '/', which
 // the command-line config provider would otherwise try to parse as a switch.
@@ -40,6 +61,8 @@ builder.Configuration.GetSection(ConsoleOptions.SectionName).Bind(opt);
 if (repoArg is not null) opt.ControlRepoPath = repoArg;   // bare arg wins
 builder.Services.AddSingleton(opt);
 builder.Services.AddSingleton<RelayHub>();
+builder.Services.AddSingleton<RelayKeyStore>();
+builder.Services.AddSingleton<ControlSigning>();
 builder.Services.AddSingleton<ControlRepo>();
 builder.Services.AddSingleton<LoginLockout>();
 
@@ -294,6 +317,28 @@ app.MapPost("/api/remote-session", async (ScreenshotApiRequest req, ControlRepo 
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// The operator vouches for the control files as they are on main now, and signs them.
+app.MapPost("/api/sign", async (ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.SignNowAsync(ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
+// The operator accepts a machine's changed remote-control key (after reinstalling it).
+app.MapPost("/api/trust-relay-key", async (ScreenshotApiRequest req, ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.TrustRelayKeyAsync(req.MachineId, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
 // The operator's browser side of a remote-control session. Cookie-authenticated like every
 // other route; RelayHub additionally checks the sessionId itself is one this console issued.
 app.Map("/relay/view", async (HttpContext ctx, RelayHub relay) =>
@@ -311,7 +356,8 @@ app.Map("/relay/view", async (HttpContext ctx, RelayHub relay) =>
 
 // The agent's side of a remote-control session. NOT cookie-gated (see the auth middleware
 // above) — authenticates instead with the single-use session token issued when the console
-// queued the request, presented as "Authorization: Bearer <token>".
+// queued the request, presented as "Authorization: Bearer <token>", PLUS the machine's signature
+// over it (RelaySignature) — the token alone is readable by every machine in the fleet.
 app.Map("/relay/agent", async (HttpContext ctx, RelayHub relay) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
@@ -320,8 +366,13 @@ app.Map("/relay/agent", async (HttpContext ctx, RelayHub relay) =>
     var sessionId = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
         ? authHeader["Bearer ".Length..].Trim()
         : "";
-    if (string.IsNullOrEmpty(sessionId) || !relay.IsValid(sessionId, machineId))
+    var proof = ctx.Request.Headers[RelaySignature.HeaderName].ToString();
+    if (string.IsNullOrEmpty(sessionId) || !relay.IsValidAgent(sessionId, machineId, proof))
     {
+        // Logged because a bad signature on a real session id is exactly what one machine
+        // trying to take over another's session looks like.
+        app.Logger.LogWarning("relay: refused agent connection for machine {MachineId} from {Ip} (unknown session or bad signature)",
+            machineId, ctx.Connection.RemoteIpAddress);
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         return;
     }
