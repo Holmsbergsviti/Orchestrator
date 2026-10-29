@@ -137,6 +137,22 @@
     ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
     /* On a phone the header wraps to several lines, so pinning it would eat the screen. */
+    /* Power column: a tidy two-column grid of equal buttons instead of a ragged wrapping row. */
+    .power { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; min-width: 230px; max-width: 280px; }
+    .power button { width: 100%; padding-left: 8px; padding-right: 8px; white-space: nowrap; }
+    .power .wide { grid-column: 1 / -1; }
+    .power a { align-self: center; text-align: center; }
+    /* Remove dialog (same look as the upgrade overlay, but dismissible). */
+    #removeDlg { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+                 padding: 20px; background: rgba(0, 0, 0, .85); }
+    #removeDlg[hidden] { display: none; }
+    #removeDlg .box { max-width: 560px; width: 100%; max-height: 90vh; overflow: auto; padding: 24px 28px;
+                      background: #050a06; border: 2px solid var(--err); box-shadow: 0 0 22px rgba(255, 59, 92, .45); }
+    #removeDlg h2 { margin: 0 0 8px; color: var(--err); font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
+    #removeDlg p { margin: 8px 0; }
+    #removeDlg .choice { display: grid; gap: 4px; margin: 14px 0; }
+    #removeDlg .choice small { color: var(--muted); }
+    #removeDlg .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
     /* "New version" flag: a loud bar across the top whenever GitHub has newer console code, and a
        full-screen overlay (until updated) that stops the page being used on an old version. */
     #upgradeBar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px;
@@ -169,6 +185,24 @@
 </head>
 <body>
   <canvas id="rain" aria-hidden="true"></canvas>
+  <div id="removeDlg" hidden role="dialog" aria-modal="true" aria-labelledby="removeTitle">
+    <div class="box">
+      <h2 id="removeTitle">Remove machine</h2>
+      <p id="removeWho"></p>
+      <div class="choice">
+        <button id="removeUninstall" class="danger">Uninstall the agent from this PC and remove it</button>
+        <small>Sends a signed uninstall command. The agent deletes its service, scheduled tasks, startup entries and
+          folder on its next sync, then the machine leaves this list. The PC has to be switched on within the hour.
+          Programs the agent installed outside its own folder stay; take the PC out of their targeting first if you want them gone.</small>
+      </div>
+      <div class="choice">
+        <button id="removeForget">Only remove it from this list</button>
+        <small>For PCs that are gone for good (a wiped VM, a duplicate after a reinstall). Nothing happens on the PC:
+          if its agent is still running, it reports again and comes back.</small>
+      </div>
+      <div class="actions"><button id="removeCancel">Cancel</button></div>
+    </div>
+  </div>
   <div id="upgradeBar" hidden role="alert">
     <span class="grow" id="upgradeBarText"></span>
     <button id="upgradeBarBtn" class="primary">Update now</button>
@@ -416,33 +450,37 @@
         const sync = m.lastSyncSuccess
           ? el('span', { className: 'pill ok', textContent: 'ok' })
           : el('span', { className: 'pill bad', title: m.lastError || '', textContent: 'error' });
-        const power = el('td', {}, [
+        const power = el('td', {}, []);
+        const grid = el('div', { className: 'power' }, [
           el('button', { type: 'button', textContent: 'Shut down', title: 'Power off this machine on its next sync',
             onclick: () => sendCommand(m, 'shutdown') }),
-          el('button', { type: 'button', textContent: 'Restart', style: 'margin-left:6px', title: 'Reboot this machine on its next sync',
+          el('button', { type: 'button', textContent: 'Restart', title: 'Reboot this machine on its next sync',
             onclick: () => sendCommand(m, 'restart') }),
-          el('button', { type: 'button', textContent: 'Screenshot', style: 'margin-left:6px',
+          el('button', { type: 'button', textContent: 'Screenshot',
             title: 'Capture the screen on its next sync (needs a logged-on user)', onclick: () => requestScreenshot(m) }),
-          el('button', { type: 'button', textContent: 'Remote', style: 'margin-left:6px',
+          el('button', { type: 'button', textContent: 'Remote',
             title: 'Start a live remote-control session (needs a logged-on user)', onclick: () => startRemoteSession(m) })
         ]);
         // A changed remote-control key is refused until the operator vouches for it: after a
         // reinstall that's expected, but it's also exactly what an impersonating machine looks like.
         if (m.relayKey === 'changed') {
-          power.append(el('button', { type: 'button', textContent: 'Trust new key', className: 'danger', style: 'margin-left:6px',
+          grid.append(el('button', { type: 'button', textContent: 'Trust new key', className: 'danger wide',
             title: 'This machine reports a different remote-control key than before. Only trust it if you reinstalled this machine.',
             onclick: () => trustRelayKey(m) }));
         }
         if (m.mac) {
-          power.append(el('button', { type: 'button', textContent: 'Wake', style: 'margin-left:6px',
+          grid.append(el('button', { type: 'button', textContent: 'Wake',
             title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => sendWake([m.machineId]) }));
         }
         if (m.lastScreenshotUtc) {
-          power.append(el('a', {
+          grid.append(el('a', {
             href: '/api/screenshot/' + encodeURIComponent(m.machineId), target: '_blank', rel: 'noopener',
-            textContent: 'View', style: 'margin-left:6px', title: 'Captured ' + relTime(m.lastScreenshotUtc)
+            textContent: 'View', title: 'Latest screenshot, captured ' + relTime(m.lastScreenshotUtc)
           }));
         }
+        grid.append(el('button', { type: 'button', textContent: 'Remove…', className: 'danger wide',
+          title: 'Remove this machine from the list, and optionally uninstall the agent from it', onclick: () => openRemove(m) }));
+        power.append(grid);
         tb.append(el('tr', {}, [
           status,
           el('td', {}, labelInput),
@@ -778,6 +816,31 @@
         else toast('Wake failed: ' + (res.message || res.detail || 'unknown error'), true);
       } catch (e) { toast('Wake failed: ' + e.message, true); }
     }
+
+    // ---- Remove a machine ---------------------------------------------------------------
+    // Two different things, spelled out in the dialog: uninstall the agent on the PC (a signed
+    // command, so it only works while the PC is on), or just drop the machine from this list.
+    let removing = null;
+    function openRemove(m) {
+      removing = m;
+      $('#removeWho').textContent = `${m.label || m.hostname} (${m.hostname})` + (m.online ? '' : ' is offline right now.');
+      $('#removeDlg').hidden = false;
+    }
+    function closeRemove() { removing = null; $('#removeDlg').hidden = true; }
+    async function removeAction(url, body, verb) {
+      const m = removing; closeRemove();
+      try {
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body(m)) });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) { toast(res.message || verb); await load(); }
+        else toast(`${verb} failed: ` + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast(`${verb} failed: ` + e.message, true); }
+    }
+    $('#removeCancel').onclick = closeRemove;
+    $('#removeDlg').addEventListener('click', e => { if (e.target.id === 'removeDlg') closeRemove(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && removing) closeRemove(); });
+    $('#removeUninstall').onclick = () => removeAction('/api/command', m => ({ machineId: m.machineId, action: 'uninstall' }), 'Uninstall');
+    $('#removeForget').onclick = () => removeAction('/api/machine/forget', m => ({ machineId: m.machineId }), 'Remove');
 
     // Send a power command (shutdown/restart) to a machine.
     async function sendCommand(m, action) {

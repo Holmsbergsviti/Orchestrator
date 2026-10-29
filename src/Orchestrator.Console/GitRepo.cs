@@ -152,6 +152,50 @@ public sealed class GitRepo(string repoPath)
         finally { try { Directory.Delete(scratchDir, recursive: true); } catch { /* temp cleanup */ } }
     }
 
+    /// <summary>Remove files/folders from <paramref name="branch"/> on the remote with one ordinary
+    /// commit, without that branch ever being checked out in this clone (it is worked on in a
+    /// scratch clone and pushed with the same git credentials). Returns false when there was
+    /// nothing to remove or the branch doesn't exist. A push that loses a race (agents commit to the
+    /// fleet-state branch constantly) starts over from a fresh clone, a few times.</summary>
+    public async Task<bool> RemovePathsOnRemoteBranchAsync(string remote, string branch, IEnumerable<string> paths, string message, CancellationToken ct)
+    {
+        var url = (await RunAsync(ct, "remote", "get-url", remote)).Trim();
+        var targets = paths.ToList();
+        for (var attempt = 1; ; attempt++)
+        {
+            var scratchDir = Path.Combine(Path.GetTempPath(), "orch-remove-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                try
+                {
+                    await new GitRepo(Path.GetTempPath()).RunAsync(ct, "clone", "--quiet", "--single-branch", "--branch", branch, "--depth", "1", url, scratchDir);
+                }
+                catch (GitException ex) when (ex.Message.Contains("not found in upstream", StringComparison.OrdinalIgnoreCase)
+                                              || ex.Message.Contains("Remote branch", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;   // no such branch: nothing to remove
+                }
+
+                var scratch = new GitRepo(scratchDir);
+                await scratch.RunAsync(ct, new[] { "rm", "-r", "-q", "--ignore-unmatch", "--" }.Concat(targets).ToArray());
+                if (string.IsNullOrWhiteSpace(await scratch.RunAsync(ct, "status", "--porcelain"))) return false;
+                await scratch.RunAsync(ct, "-c", "user.name=Orchestrator console", "-c", "user.email=console@orchestrator.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", message);
+                try
+                {
+                    await scratch.RunAsync(ct, "push", "--quiet", "origin", $"HEAD:refs/heads/{branch}");
+                    return true;
+                }
+                catch (GitException ex) when (attempt < 4 && (ex.Message.Contains("rejected", StringComparison.OrdinalIgnoreCase)
+                                                              || ex.Message.Contains("fetch first", StringComparison.OrdinalIgnoreCase)))
+                {
+                    // Someone (an agent) pushed in between: go round again from what is there now.
+                }
+            }
+            finally { try { Directory.Delete(scratchDir, recursive: true); } catch { /* temp cleanup */ } }
+        }
+    }
+
     /// <summary>The full SHA HEAD points at now, or null when it can't be read (synchronous twin of <see cref="HeadAsync"/>).</summary>
     public string? Head() => TryRun(out var o, out _, "rev-parse", "HEAD") ? o.Trim() : null;
 

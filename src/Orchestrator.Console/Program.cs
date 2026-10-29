@@ -280,6 +280,13 @@ app.MapPost("/api/command", async (CommandRequest req, ControlRepo r, Cancellati
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// Take a machine off the list (its agent, if still running, will simply report again).
+app.MapPost("/api/machine/forget", async (ForgetRequest req, ControlRepo r, CancellationToken ct) =>
+{
+    var result = await r.ForgetMachineAsync(req.MachineId, ct);
+    return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+});
+
 // Wake-on-LAN one or more machines (the waker agent sends the packets).
 app.MapPost("/api/wake", async (WakeApiRequest req, ControlRepo r, CancellationToken ct) =>
 {

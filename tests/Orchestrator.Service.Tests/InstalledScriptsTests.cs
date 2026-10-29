@@ -16,10 +16,25 @@ public sealed class InstalledScriptsTests
     [Theory]
     [InlineData("scripts/install.ps1", "RelayCertThumbprint")]
     [InlineData("scripts/update-agent.ps1", "install.ps1")]
+    [InlineData("scripts/uninstall-agent.ps1", "sc.exe delete")]
     public void InstallerScripts_AreEmbeddedInTheAgent(string resource, string mustContain)
     {
         using var stream = typeof(InstalledScripts).Assembly.GetManifestResourceStream(resource);
         Assert.NotNull(stream);
         Assert.Contains(mustContain, new StreamReader(stream!).ReadToEnd());
+    }
+
+    [Fact]
+    public void UninstallScript_CanBeExtractedToATempFile_ForARunOutsideTheInstallFolder()
+    {
+        var path = InstalledScripts.ExtractToTemp("uninstall-agent.ps1");
+        try
+        {
+            Assert.NotNull(path);
+            Assert.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar), path!);
+            Assert.Contains("Remove-Item", File.ReadAllText(path!));
+        }
+        finally { if (path is not null) File.Delete(path); }
+        Assert.Null(InstalledScripts.ExtractToTemp("no-such-script.ps1"));
     }
 }
