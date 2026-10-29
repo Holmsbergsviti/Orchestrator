@@ -74,6 +74,31 @@ Describe "install.ps1 settings merge" {
             } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
         }
 
+        It "keeps the state repo and its token, and can switch it off again" {
+            $root = New-ExistingInstall ($script:Installed + @{ StateRepoOwner = "acme"; StateRepoName = "control-state"; StateToken = "ghp_state" })
+            try {
+                $s = Invoke-Settings -Root $root -Extra @{ Token = "ghp_readonly" }
+                $s.GitHubToken    | Should -Be "ghp_readonly"
+                $s.StateRepoOwner | Should -Be "acme"
+                $s.StateRepoName  | Should -Be "control-state"
+                $s.StateToken     | Should -Be "ghp_state"
+
+                $off = Invoke-Settings -Root $root -Extra @{ StateRepo = "" }
+                $off.StateRepoOwner | Should -Be ""
+                $off.StateRepoName  | Should -Be ""
+            } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "splits -StateRepo owner/name and rejects anything else" {
+            $root = New-ExistingInstall $script:Installed
+            try {
+                $s = Invoke-Settings -Root $root -Extra @{ StateRepo = "acme/control-state" }
+                $s.StateRepoOwner | Should -Be "acme"
+                $s.StateRepoName  | Should -Be "control-state"
+                { Invoke-Settings -Root $root -Extra @{ StateRepo = "just-a-name" } } | Should -Throw
+            } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+
         It "needs no arguments at all for a plain upgrade" {
             $root = New-ExistingInstall $script:Installed
             try {

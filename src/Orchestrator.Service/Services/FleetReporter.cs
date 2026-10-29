@@ -56,7 +56,7 @@ public sealed class FleetReporter : IFleetReporter
     private readonly IManifestService _manifests;
     private readonly IConfigService _configService;
     private readonly IRelayIdentity _relayIdentity;   // supplies the public key the console pins
-    private int _ownerTokenWarned;                     // 0/1: the owner-token warning has been logged
+    private int _ownerTokenWarned;                     // 0/1: the writable-token warning has been logged
     private readonly ILogger<FleetReporter> _log;
     private readonly OrchestratorConfig _config;
 
@@ -87,12 +87,10 @@ public sealed class FleetReporter : IFleetReporter
                 .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)       // ...in a stable order (so the signature is stable)
                 .ToList()) ?? new List<string>();
 
-            var tokenLogin = await _github.GetTokenLoginAsync(ct);   // whose token is this machine holding?
-            var tokenIsOwner = tokenLogin is not null && string.Equals(tokenLogin, _config.RepoOwner, StringComparison.OrdinalIgnoreCase);
-            if (tokenIsOwner && Interlocked.Exchange(ref _ownerTokenWarned, 1) == 0)   // once per run, not every cycle
-                _log.LogWarning("The GitHub token on this machine belongs to the control repo's owner ({Login}), so it can push to main. " +
-                    "Anyone who copies it from this PC could push code to every machine. Use a separate account for agents (docs/SETUP.md, \"Lock down main\").",
-                    tokenLogin);
+            var controlTokenCanWrite = await _github.CanControlTokenWriteAsync(ct);   // could this token push to main?
+            if (controlTokenCanWrite == true && Interlocked.Exchange(ref _ownerTokenWarned, 1) == 0)   // once per run, not every cycle
+                _log.LogWarning("The token this machine reads the control repo with can also PUSH to it. Anyone who copies it from this " +
+                    "PC could push code to every machine. Use a read-only token plus a separate state repo (docs/SETUP.md, \"Lock down main\").");
 
             var current = new Heartbeat
             {
@@ -110,8 +108,7 @@ public sealed class FleetReporter : IFleetReporter
                 LastError = record.Errors.Count > 0 ? record.Errors[0] : null,
                 MacAddresses = GetMacAddresses(),
                 RelayPublicKey = _relayIdentity.PublicKey,
-                TokenLogin = tokenLogin,
-                TokenIsRepoOwner = tokenIsOwner
+                ControlTokenCanWrite = controlTokenCanWrite
             };
 
             var last = LoadLastHeartbeat();   // the last one we committed (if any)

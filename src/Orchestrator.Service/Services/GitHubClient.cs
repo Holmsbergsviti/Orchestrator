@@ -39,9 +39,10 @@ public interface IGitHubClient   // the contract for GitHub access
     /// <summary>Create or update a file on a branch. Pass the current <paramref name="sha"/> to update, or null to create.</summary>
     Task PutFileAsync(string repoPath, byte[] content, string branch, string commitMessage, string? sha, CancellationToken ct = default);
 
-    /// <summary>The GitHub login the configured token belongs to, or null (no token, a token
-    /// type that can't answer, or GitHub unreachable). Cached once known.</summary>
-    Task<string?> GetTokenLoginAsync(CancellationToken ct = default);
+    /// <summary>Can the CONTROL-repo token push to it? True/false once known, null if it can't be
+    /// told (no token, GitHub unreachable). A token that can is the fleet's biggest risk: a copy
+    /// of it from this one machine could push code to every machine. Cached once known.</summary>
+    Task<bool?> CanControlTokenWriteAsync(CancellationToken ct = default);
 }
 
 /// <summary>Thrown when GitHub rejects a write (401/403) — usually the token lacks write access.</summary>
@@ -54,7 +55,8 @@ public sealed class GitHubWriteForbiddenException(string message) : Exception(me
 /// </summary>
 public sealed class GitHubClient : IGitHubClient
 {
-    public const string HttpClientName = "github";   // the name of the pre-configured HttpClient (set up in Program.cs)
+    public const string HttpClientName = "github";              // reads: the control repo, with GitHubToken
+    public const string StateHttpClientName = "github-state";   // writes: the state repo, with StateToken (see OrchestratorConfig)
 
     private static readonly JsonSerializerOptions JsonOpts = new()   // JSON parsing options
     {
@@ -187,34 +189,49 @@ public sealed class GitHubClient : IGitHubClient
         return await resp.Content.ReadAsByteArrayAsync(ct);   // read and return the file's bytes
     }
 
-    private string? _tokenLogin;   // whose token this is; it can't change while the process lives
+    private bool? _controlTokenCanWrite;   // a token's permissions don't change while the process lives
 
-    public async Task<string?> GetTokenLoginAsync(CancellationToken ct = default)
+    public async Task<bool?> CanControlTokenWriteAsync(CancellationToken ct = default)
     {
-        if (_tokenLogin is not null) return _tokenLogin;
-        if (string.IsNullOrWhiteSpace(_config.GitHubToken)) return null;   // anonymous: nobody's token to leak
+        if (_controlTokenCanWrite is not null) return _controlTokenCanWrite;
+        if (string.IsNullOrWhiteSpace(_config.GitHubToken)) return null;   // anonymous: can't write anything
         try
         {
+            // Probe without changing anything: ask to create a branch pointing at a commit that
+            // can't exist. A token allowed to write gets past the permission check and is turned
+            // away for the bad commit (422); a read-only token is stopped at the door (403/404).
             var client = _httpFactory.CreateClient(HttpClientName);
-            using var resp = await client.GetAsync("/user", ct);
-            if (!resp.IsSuccessStatusCode) return null;   // e.g. a token without user scope; just unknown
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync(ct));
-            _tokenLogin = doc.RootElement.TryGetProperty("login", out var login) ? login.GetString() : null;
-            return _tokenLogin;
+            var body = new { @ref = "refs/heads/orchestrator-write-probe", sha = new string('0', 40) };
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"/repos/{_config.RepoOwner}/{_config.RepoName}/git/refs")
+            {
+                Content = JsonContent(body)
+            };
+            using var resp = await client.SendAsync(req, ct);
+            _controlTokenCanWrite = resp.StatusCode switch
+            {
+                HttpStatusCode.UnprocessableEntity => true,
+                HttpStatusCode.Forbidden or HttpStatusCode.NotFound or HttpStatusCode.Unauthorized => false,
+                _ => null   // anything else (rate limit, outage): don't guess, ask again next cycle
+            };
+            return _controlTokenCanWrite;
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            _log.LogDebug(ex, "Could not look up which account the GitHub token belongs to");
+            _log.LogDebug(ex, "Could not check whether the control-repo token can write");
             return null;
         }
     }
 
     // ---- Write path (heartbeats) -------------------------------------------------------
+    // Everything below writes, and writes go to the STATE repo with the state token — the
+    // control repo itself only when no separate state repo is configured.
+
+    private string StateRepo => $"{_config.EffectiveStateOwner}/{_config.EffectiveStateRepo}";
 
     public async Task<string?> GetFileShaAsync(string repoPath, string branch, CancellationToken ct = default)
     {
-        var client = _httpFactory.CreateClient(HttpClientName);
-        var uri = $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{EncodePath(repoPath)}?ref={Uri.EscapeDataString(branch)}";
+        var client = _httpFactory.CreateClient(StateHttpClientName);
+        var uri = $"/repos/{StateRepo}/contents/{EncodePath(repoPath)}?ref={Uri.EscapeDataString(branch)}";
 
         using var resp = await client.GetAsync(uri, ct);   // default Accept (application/vnd.github+json) -> metadata with "sha"
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;   // file not there yet -> no sha
@@ -228,16 +245,20 @@ public sealed class GitHubClient : IGitHubClient
     {
         if (await GetRefShaAsync(branch, ct) is not null) return true;   // already exists -> nothing to do
 
+        // In a separate state repo the control repo's branch name means nothing; branch off
+        // whatever that repo's default branch is (it needs one commit, e.g. a README).
+        if (_config.UsesSeparateStateRepo) baseBranch = await GetStateDefaultBranchAsync(ct) ?? baseBranch;
         var baseSha = await GetRefShaAsync(baseBranch, ct);   // branch off the base branch's current tip
         if (baseSha is null)
         {
-            _log.LogWarning("Cannot create branch '{Branch}': base branch '{Base}' not found", branch, baseBranch);
+            _log.LogWarning("Cannot create branch '{Branch}' in {Repo}: base branch '{Base}' not found. " +
+                "A brand-new state repo needs one commit first — create it with \"Add a README\" ticked.", branch, StateRepo, baseBranch);
             return false;
         }
 
-        var client = _httpFactory.CreateClient(HttpClientName);
+        var client = _httpFactory.CreateClient(StateHttpClientName);
         var body = new { @ref = $"refs/heads/{branch}", sha = baseSha };   // GitHub Git-refs API: create a new branch ref
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"/repos/{_config.RepoOwner}/{_config.RepoName}/git/refs")
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/repos/{StateRepo}/git/refs")
         {
             Content = JsonContent(body)
         };
@@ -251,7 +272,7 @@ public sealed class GitHubClient : IGitHubClient
 
     public async Task PutFileAsync(string repoPath, byte[] content, string branch, string commitMessage, string? sha, CancellationToken ct = default)
     {
-        var client = _httpFactory.CreateClient(HttpClientName);
+        var client = _httpFactory.CreateClient(StateHttpClientName);
         var body = new Dictionary<string, string?>   // GitHub Contents API: create/update a file
         {
             ["message"] = commitMessage,
@@ -260,7 +281,7 @@ public sealed class GitHubClient : IGitHubClient
         };
         if (!string.IsNullOrEmpty(sha)) body["sha"] = sha;   // updating an existing file requires its current sha
 
-        using var req = new HttpRequestMessage(HttpMethod.Put, $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{EncodePath(repoPath)}")
+        using var req = new HttpRequestMessage(HttpMethod.Put, $"/repos/{StateRepo}/contents/{EncodePath(repoPath)}")
         {
             Content = JsonContent(body)
         };
@@ -269,11 +290,22 @@ public sealed class GitHubClient : IGitHubClient
         resp.EnsureSuccessStatusCode();
     }
 
+    /// <summary>The state repo's default branch, or null if it can't be read.</summary>
+    private async Task<string?> GetStateDefaultBranchAsync(CancellationToken ct)
+    {
+        var client = _httpFactory.CreateClient(StateHttpClientName);
+        using var resp = await client.GetAsync($"/repos/{StateRepo}", ct);
+        ThrowIfForbidden(resp, "read the state repo");
+        if (!resp.IsSuccessStatusCode) return null;
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync(ct));
+        return doc.RootElement.TryGetProperty("default_branch", out var b) ? b.GetString() : null;
+    }
+
     /// <summary>Get the commit SHA a branch points at, or null if the branch doesn't exist.</summary>
     private async Task<string?> GetRefShaAsync(string branch, CancellationToken ct)
     {
-        var client = _httpFactory.CreateClient(HttpClientName);
-        var uri = $"/repos/{_config.RepoOwner}/{_config.RepoName}/git/ref/heads/{Uri.EscapeDataString(branch)}";
+        var client = _httpFactory.CreateClient(StateHttpClientName);
+        var uri = $"/repos/{StateRepo}/git/ref/heads/{Uri.EscapeDataString(branch)}";
         using var resp = await client.GetAsync(uri, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         resp.EnsureSuccessStatusCode();

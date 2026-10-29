@@ -19,9 +19,13 @@
 
 .PARAMETER RepoOwner    GitHub user or org that owns the repo.
 .PARAMETER RepoName     Repository name.
-.PARAMETER Token        Personal Access Token with Contents read+write on the control repo (write is
-                        needed for heartbeats). Use a separate bot account's token, not your own:
-                        see docs/SETUP.md, "Lock down main". Omit for public repos.
+.PARAMETER Token        Token for reading the control repo. With -StateRepo set, make this a
+                        READ-ONLY token (fine-grained, Contents: Read-only) -- see docs/SETUP.md,
+                        "Lock down main". Without -StateRepo it also needs write, for heartbeats.
+                        Omit for public repos.
+.PARAMETER StateRepo    "owner/name" of a separate repo that heartbeats and screenshots are written
+                        to, so the control-repo token can be read-only. Blank = the control repo.
+.PARAMETER StateToken   Token with Contents read+write on the -StateRepo repo ONLY.
 .PARAMETER Branch       Branch to read (blank = value from defaults.json).
 .PARAMETER IntervalMinutes  Sync interval (0 = value from defaults.json).
 .PARAMETER InstallRoot  Install directory (blank = value from defaults.json).
@@ -59,6 +63,8 @@ param(
     [string]$RepoOwner = "",                                    # GitHub owner of the control repo
     [string]$RepoName = "",                                     # control repo name
     [string]$Token = "",                                        # access token; blank means the repo is public
+    [string]$StateRepo = "",                                    # "owner/name" of a separate repo for heartbeats (blank = control repo)
+    [string]$StateToken = "",                                   # write token for that repo only (blank = reuse -Token)
     [string]$Branch = "",                                       # branch to read (blank -> filled from defaults.json)
     [int]$IntervalMinutes = 0,                                   # sync interval in minutes (0 -> filled from defaults.json)
     [string]$InstallRoot = "",                                  # install folder (blank -> filled from defaults.json)
@@ -129,6 +135,15 @@ $given = $PSBoundParameters
 $RepoOwner           = if ($given.ContainsKey('RepoOwner'))           { $RepoOwner }           elseif ($old -and $old.RepoOwner)           { $old.RepoOwner }           else { "" }
 $RepoName            = if ($given.ContainsKey('RepoName'))            { $RepoName }            elseif ($old -and $old.RepoName)            { $old.RepoName }            else { "" }
 $Token               = if ($given.ContainsKey('Token'))               { $Token }               elseif ($old -and $old.GitHubToken)         { $old.GitHubToken }         else { "" }
+$StateToken          = if ($given.ContainsKey('StateToken'))          { $StateToken }          elseif ($old -and $old.StateToken)          { $old.StateToken }          else { "" }
+# -StateRepo is one "owner/name" argument but two settings; blank deliberately switches back to the control repo.
+if ($given.ContainsKey('StateRepo')) {
+    if ($StateRepo -and $StateRepo -notmatch '^[^/\s]+/[^/\s]+$') { throw "-StateRepo must look like 'owner/name', got '$StateRepo'." }
+    $StateRepoOwner, $StateRepoName = if ($StateRepo) { $StateRepo.Split('/') } else { "", "" }
+} else {
+    $StateRepoOwner = if ($old -and $old.StateRepoOwner) { $old.StateRepoOwner } else { "" }
+    $StateRepoName  = if ($old -and $old.StateRepoName)  { $old.StateRepoName }  else { "" }
+}
 $Branch              = if ($given.ContainsKey('Branch'))              { $Branch }              elseif ($old -and $old.Branch)              { $old.Branch }              else { $D.defaultBranch }
 $IntervalMinutes     = if ($given.ContainsKey('IntervalMinutes'))     { $IntervalMinutes }     elseif ($old -and $old.SyncIntervalMinutes)  { [int]$old.SyncIntervalMinutes } else { [int]$D.defaultSyncIntervalMinutes }
 $RelayUrl            = if ($given.ContainsKey('RelayUrl'))            { $RelayUrl }            elseif ($old -and $old.RelayUrl)            { $old.RelayUrl }            else { "" }
@@ -148,6 +163,9 @@ if ($ShowSettings) {
         RepoName            = $RepoName
         Branch              = $Branch
         GitHubToken         = $Token
+        StateRepoOwner      = $StateRepoOwner
+        StateRepoName       = $StateRepoName
+        StateToken          = $StateToken
         SyncIntervalMinutes = $IntervalMinutes
         IsWaker             = $IsWakerValue
         AutoUpdate          = $AutoUpdateValue
@@ -216,7 +234,12 @@ $config = [ordered]@{
         RepoName            = $RepoName           # GitHub repo to read from
         Branch              = $Branch             # branch to read
         ManifestPath        = $D.manifestFileName # file in the repo that lists the programs (from defaults.json)
-        GitHubToken         = $Token              # token for private repos (blank if public)
+        GitHubToken         = $Token              # token for private repos (blank if public); read-only once a state repo is set
+        # Separate state repo: where heartbeats/screenshots are written, so the token above never
+        # needs write access to the control repo (see docs/SETUP.md, "Lock down main").
+        StateRepoOwner      = $StateRepoOwner     # blank = write to the control repo's fleet-state branch
+        StateRepoName       = $StateRepoName
+        StateToken          = $StateToken         # write token for the state repo only (blank = reuse GitHubToken)
         SyncIntervalMinutes = $IntervalMinutes    # minutes between sync cycles
         StartupRegistryKey  = $D.registryRunKey   # registry path for startup entries (from defaults.json)
         RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)

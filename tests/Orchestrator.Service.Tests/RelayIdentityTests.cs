@@ -132,11 +132,33 @@ public sealed class RelayIdentityTests : IDisposable
     [Fact]
     public void SwitchingToken_ChangesTheHeartbeatSignature()
     {
-        // Moving a machine to the bot account's token must clear the console's warning promptly.
-        var hb = new Heartbeat { MachineId = "m1", TokenLogin = "owner", TokenIsRepoOwner = true };
+        // Moving a machine to a read-only token must clear the console's warning promptly.
+        var hb = new Heartbeat { MachineId = "m1", ControlTokenCanWrite = true };
         var before = hb.Signature;
-        hb.TokenLogin = "owner-fleet";
-        hb.TokenIsRepoOwner = false;
+        hb.ControlTokenCanWrite = false;
         Assert.NotEqual(before, hb.Signature);
+    }
+
+    [Fact]
+    public void StateRepo_DefaultsToTheControlRepo()
+    {
+        var c = new OrchestratorConfig { RepoOwner = "me", RepoName = "control", GitHubToken = "read" };
+        Assert.False(c.UsesSeparateStateRepo);
+        Assert.Equal("me", c.EffectiveStateOwner);
+        Assert.Equal("control", c.EffectiveStateRepo);
+        Assert.Equal("read", c.EffectiveStateToken);   // older installs keep working unchanged
+    }
+
+    [Fact]
+    public void StateRepo_WhenSet_GetsItsOwnRepoAndToken()
+    {
+        var c = new OrchestratorConfig
+        {
+            RepoOwner = "me", RepoName = "control", GitHubToken = "read",
+            StateRepoOwner = "me", StateRepoName = "control-state", StateToken = "write"
+        };
+        Assert.True(c.UsesSeparateStateRepo);
+        Assert.Equal("control-state", c.EffectiveStateRepo);
+        Assert.Equal("write", c.EffectiveStateToken);
     }
 }
