@@ -19,7 +19,9 @@
 
 .PARAMETER RepoOwner    GitHub user or org that owns the repo.
 .PARAMETER RepoName     Repository name.
-.PARAMETER Token        Personal Access Token (repo:read). Omit for public repos.
+.PARAMETER Token        Personal Access Token with Contents read+write on the control repo (write is
+                        needed for heartbeats). Use a separate bot account's token, not your own:
+                        see docs/SETUP.md, "Lock down main". Omit for public repos.
 .PARAMETER Branch       Branch to read (blank = value from defaults.json).
 .PARAMETER IntervalMinutes  Sync interval (0 = value from defaults.json).
 .PARAMETER InstallRoot  Install directory (blank = value from defaults.json).

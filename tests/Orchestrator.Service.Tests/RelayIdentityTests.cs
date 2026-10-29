@@ -128,4 +128,15 @@ public sealed class RelayIdentityTests : IDisposable
         hb.RelayPublicKey = "key";
         Assert.NotEqual(before, hb.Signature);
     }
+
+    [Fact]
+    public void SwitchingToken_ChangesTheHeartbeatSignature()
+    {
+        // Moving a machine to the bot account's token must clear the console's warning promptly.
+        var hb = new Heartbeat { MachineId = "m1", TokenLogin = "owner", TokenIsRepoOwner = true };
+        var before = hb.Signature;
+        hb.TokenLogin = "owner-fleet";
+        hb.TokenIsRepoOwner = false;
+        Assert.NotEqual(before, hb.Signature);
+    }
 }

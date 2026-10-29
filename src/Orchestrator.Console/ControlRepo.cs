@@ -79,6 +79,9 @@ public sealed class MachineView
     /// (agent too old to sign), "changed" (key differs from the pinned one), or "error" (the
     /// console couldn't read its pin file). Anything but "trusted" means Remote is refused.</summary>
     public string RelayKey { get; set; } = "missing";
+    /// <summary>True when this machine's GitHub token is the control-repo owner's, so a copy of
+    /// it could push to main and reach every machine. See docs/SETUP.md, "Lock down main".</summary>
+    public bool TokenIsRepoOwner { get; set; }
 }
 
 public sealed class StateResponse
@@ -214,6 +217,8 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("lastError")] public string? LastError { get; set; }
     [JsonPropertyName("macAddresses")] public List<string> MacAddresses { get; set; } = new();
     [JsonPropertyName("relayPublicKey")] public string? RelayPublicKey { get; set; }   // null = older agent
+    [JsonPropertyName("tokenLogin")] public string? TokenLogin { get; set; }             // whose GitHub token the agent holds
+    [JsonPropertyName("tokenIsRepoOwner")] public bool TokenIsRepoOwner { get; set; }    // true = that token can push main
 }
 
 // ---- service -------------------------------------------------------------------------
@@ -298,6 +303,14 @@ public sealed class ControlRepo
             .OrderByDescending(m => m.Online)
             .ThenBy(m => m.Label ?? m.Hostname, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        // The fleet's biggest single risk, said where it can't be missed: one copied token from
+        // any of these machines can push to main, i.e. run code as SYSTEM everywhere.
+        var ownerTokens = resp.Machines.Where(m => m.TokenIsRepoOwner).Select(m => m.Label ?? m.Hostname).ToList();
+        if (ownerTokens.Count > 0)
+            resp.Warnings.Add($"{ownerTokens.Count} machine(s) use your own GitHub token, which can push to main: " +
+                $"{string.Join(", ", ownerTokens)}. Anyone who copies it from one of them can run code on every machine. " +
+                "Give agents a separate account's token and lock main down — see docs/SETUP.md, \"Lock down main\".");
 
         resp.Programs = programNodes.Select(ToProgramView).ToList();
         return resp;
@@ -963,7 +976,8 @@ public sealed class ControlRepo
             AppliedProgramIds = hb.AppliedProgramIds,
             Mac = hb.MacAddresses.FirstOrDefault(),
             LastScreenshotUtc = shot?.CapturedUtc,
-            RelayKey = relayKey
+            RelayKey = relayKey,
+            TokenIsRepoOwner = hb.TokenIsRepoOwner
         };
     }
 

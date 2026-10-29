@@ -44,6 +44,39 @@ GitHub → Settings → Developer settings → Personal access tokens.
   `ReportState: false`).
 - Classic: `repo` scope.
 
+> **Don't give the agents your own token for long.** Every machine stores its token in plain
+> text, and a token that can write heartbeats can also push to `main` — so one copied token
+> means code running as SYSTEM on every machine. Fine for a first test; before you rely on the
+> fleet, do [3a](#3a-lock-down-main-recommended). The console shows a warning while any machine
+> still holds the repo owner's token.
+
+## 3a. Lock down main (recommended)
+GitHub can't tell your token from an agent's while both belong to you, so the agents get an
+account of their own, and `main` only accepts pushes from you.
+
+1. **Create a second GitHub account** for the agents (e.g. `<you>-fleet`). Free is fine.
+2. In the **control repo** → Settings → Collaborators → **Add people** → the bot account, role
+   **Write**. Accept the invite while signed in as the bot.
+3. As the **bot**, create a **classic** token with the `repo` scope (fine-grained tokens can't
+   reach a repo owned by another personal account). The bot has access to nothing but this repo,
+   so `repo` means just that.
+4. In the **control repo** (as you) → Settings → Rules → Rulesets → **New branch ruleset**:
+   - Name `protect main`, Enforcement **Active**.
+   - Bypass list → **Add bypass** → **Repository admin** (that's you, the console, and the
+     `CONTROL_REPO_TOKEN` the publish workflow uses — all yours).
+   - Target branches → **Include default branch**.
+   - Rules: **Restrict updates**, **Restrict deletions**, **Block force pushes**.
+   - Leave `fleet-state` alone — agents write their heartbeats there.
+5. Reinstall each machine with the bot's token. Everything else is kept:
+   ```powershell
+   .\scripts\install.ps1 -Token ghp_bot_xxx
+   ```
+6. Once no machine shows the console warning, **revoke** the old token on your own account.
+
+After this, a token stolen from a machine can still write heartbeats (worst case: fake status
+or a wrong "last seen"), but it can't change `manifest.json`, `commands.json` or `agent.json`,
+so it can't run anything anywhere.
+
 On its first heartbeat each agent auto-creates the **`fleet-state`** branch and writes
 `state/<machineId>.json` to it. You don't need to create that branch yourself.
 

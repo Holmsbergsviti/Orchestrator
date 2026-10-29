@@ -67,6 +67,16 @@ public sealed class Heartbeat
     [JsonPropertyName("relayPublicKey")]
     public string? RelayPublicKey { get; set; }
 
+    /// <summary>The GitHub account this machine's token belongs to (null if unknown/anonymous).
+    /// When that's the control repo's OWNER, the token can push to main — so a copy taken from
+    /// this one machine could run code as SYSTEM on the whole fleet. The console warns about
+    /// it; the fix is a separate account for agents (docs/SETUP.md, "Lock down main").</summary>
+    [JsonPropertyName("tokenLogin")]
+    public string? TokenLogin { get; set; }
+
+    [JsonPropertyName("tokenIsRepoOwner")]
+    public bool TokenIsRepoOwner { get; set; }
+
     /// <summary>
     /// A stable fingerprint of everything that MATTERS (i.e. not the timestamp). If this
     /// is unchanged from the last pushed heartbeat, the machine's situation hasn't really
@@ -86,5 +96,6 @@ public sealed class Heartbeat
             string.Join(',', AppliedProgramIds),
             string.Join(',', MacAddresses),
             RelayPublicKey ?? "",   // a new key must reach the console promptly, not hours later
+            TokenLogin ?? "",       // so swapping to a bot token clears the console's warning promptly
             LastError ?? "");
 }

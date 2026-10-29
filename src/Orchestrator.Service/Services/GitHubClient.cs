@@ -38,6 +38,10 @@ public interface IGitHubClient   // the contract for GitHub access
 
     /// <summary>Create or update a file on a branch. Pass the current <paramref name="sha"/> to update, or null to create.</summary>
     Task PutFileAsync(string repoPath, byte[] content, string branch, string commitMessage, string? sha, CancellationToken ct = default);
+
+    /// <summary>The GitHub login the configured token belongs to, or null (no token, a token
+    /// type that can't answer, or GitHub unreachable). Cached once known.</summary>
+    Task<string?> GetTokenLoginAsync(CancellationToken ct = default);
 }
 
 /// <summary>Thrown when GitHub rejects a write (401/403) — usually the token lacks write access.</summary>
@@ -181,6 +185,28 @@ public sealed class GitHubClient : IGitHubClient
         resp.EnsureSuccessStatusCode();   // any other non-success status -> throw
 
         return await resp.Content.ReadAsByteArrayAsync(ct);   // read and return the file's bytes
+    }
+
+    private string? _tokenLogin;   // whose token this is; it can't change while the process lives
+
+    public async Task<string?> GetTokenLoginAsync(CancellationToken ct = default)
+    {
+        if (_tokenLogin is not null) return _tokenLogin;
+        if (string.IsNullOrWhiteSpace(_config.GitHubToken)) return null;   // anonymous: nobody's token to leak
+        try
+        {
+            var client = _httpFactory.CreateClient(HttpClientName);
+            using var resp = await client.GetAsync("/user", ct);
+            if (!resp.IsSuccessStatusCode) return null;   // e.g. a token without user scope; just unknown
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync(ct));
+            _tokenLogin = doc.RootElement.TryGetProperty("login", out var login) ? login.GetString() : null;
+            return _tokenLogin;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            _log.LogDebug(ex, "Could not look up which account the GitHub token belongs to");
+            return null;
+        }
     }
 
     // ---- Write path (heartbeats) -------------------------------------------------------
