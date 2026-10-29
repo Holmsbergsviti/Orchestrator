@@ -346,6 +346,15 @@
       // warnings
       const w = $('#warnings'); w.innerHTML = '';
       for (const msg of state.warnings || []) w.append(el('div', { className: 'warn', textContent: msg }));
+      // Control files that machines will ignore until they're signed. Signing vouches for the
+      // file exactly as it is on GitHub now, so the button asks before it does that.
+      const unsigned = state.signing?.keyPresent ? (state.signing.unsigned || []) : [];
+      if (unsigned.length) {
+        w.append(el('div', { className: 'warn' }, [
+          el('button', { type: 'button', textContent: 'Sign ' + unsigned.map(u => u.path).join(' + '), className: 'primary',
+            onclick: () => signNow(unsigned) })
+        ]));
+      }
 
       renderMachines();
       renderTargeting();
@@ -688,6 +697,18 @@
           toast('Remote session failed: ' + (res.message || res.detail || 'unknown error'), true);
         }
       } catch (e) { toast('Remote session failed: ' + e.message, true); }
+    }
+
+    async function signNow(unsigned) {
+      const lines = unsigned.map(u => `• ${u.path}` + (u.lastChange ? ` (last changed by ${u.lastChange})` : '')).join('\n');
+      if (!confirm(`Sign these files exactly as they are on GitHub now?\n\n${lines}\n\nMachines will then act on them. ` +
+                   `Only do this if you made (or checked) these changes yourself.`)) return;
+      try {
+        const r = await fetch('/api/sign', { method: 'POST' });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) { toast(res.commit ? `${res.message} · ${res.commit}` : res.message); load(); }
+        else toast('Sign failed: ' + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast('Sign failed: ' + e.message, true); }
     }
 
     async function trustRelayKey(m) {

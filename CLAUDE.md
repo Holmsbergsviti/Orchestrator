@@ -137,6 +137,13 @@ that matter:
   rewrites `appsettings.json` keeping only the keys it knows. So both scripts are embedded in
   the exe and `InstalledScripts` rewrites the on-disk copies at service start; a new setting
   added to `install.ps1` reaches machines with the next build instead of being wiped by it.
+- **Signed control files.** `manifest.json`, `commands.json` and `agent.json` each have a
+  `.sig` beside them, made by the operator's key (console: `ControlSigning`; CI: openssl in
+  `publish-agent.yml`). A build compiled with `-p:OrchestratorSigningKey=<public key>` (CI does
+  this from the `AGENT_SIGNING_KEY` secret) refuses those files unsigned, edited, or older than
+  the last one accepted (`ControlFileVerifier`), and refuses programs without a checksum. A
+  build without the key enforces nothing. The console refuses to save on top of an unsigned
+  change, since saving signs the whole file. Keep the three copies of the signed format in step.
 - Heartbeats carry `agentSha256` (the running exe's hash) and the console compares it to
   `agent.json`, so "which machines are on the current build" is answerable.
 

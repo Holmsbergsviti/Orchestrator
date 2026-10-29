@@ -82,4 +82,16 @@
     </EmbeddedResource>
   </ItemGroup>
 
+  <!-- The operator's PUBLIC signing key, passed in by publish-agent.yml as
+       -p:OrchestratorSigningKey=<base64 SPKI> (derived from the AGENT_SIGNING_KEY secret).
+       A build that has it refuses unsigned manifest.json / commands.json / agent.json (see
+       ControlFileVerifier.cs); a build without it — local dev, or CI before the secret is set —
+       enforces nothing and behaves as before. -->
+  <ItemGroup Condition="'$(OrchestratorSigningKey)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>OrchestratorSigningKey</_Parameter1>
+      <_Parameter2>$(OrchestratorSigningKey)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

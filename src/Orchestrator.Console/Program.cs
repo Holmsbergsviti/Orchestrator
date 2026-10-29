@@ -20,6 +20,27 @@ using Microsoft.AspNetCore.Authentication;          // AuthenticationProperties
 using Microsoft.AspNetCore.Authentication.Cookies;  // cookie auth scheme
 using Orchestrator.Console;                         // ConsoleOptions / ControlRepo / ConsoleAuth
 
+// "signing-key": one-time setup for signed control files. Creates the operator's signing key
+// on this computer (or shows the existing one) and prints what goes into the code repo's
+// AGENT_SIGNING_KEY secret. Then exits; it doesn't start the console.
+if (args.Length > 0 && args[0] == "signing-key")
+{
+    var signing = new ControlSigning(args.Length > 1 ? args[1] : ControlSigning.DefaultKeyPath);
+    var (pem, created) = signing.LoadOrCreate();
+    System.Console.WriteLine(created ? $"Created a signing key at {signing.KeyPath}" : $"Using the existing signing key at {signing.KeyPath}");
+    System.Console.WriteLine();
+    System.Console.WriteLine("1. Copy EVERYTHING between the lines below (including the BEGIN/END lines).");
+    System.Console.WriteLine("2. In the code repo on GitHub: Settings > Secrets and variables > Actions > New repository secret.");
+    System.Console.WriteLine("   Name: AGENT_SIGNING_KEY   Secret: paste it.");
+    System.Console.WriteLine("3. Back up the key file above somewhere safe. Anyone who has it can command your fleet;");
+    System.Console.WriteLine("   if you lose it, run this again on a new computer and replace the secret.");
+    System.Console.WriteLine();
+    System.Console.WriteLine("----------------------------------------------------------------");
+    System.Console.Write(pem.EndsWith('\n') ? pem : pem + "\n");
+    System.Console.WriteLine("----------------------------------------------------------------");
+    return 0;
+}
+
 // A first bare argument (not a --switch) is a convenience for the repo path. Pull it out
 // BEFORE handing args to the config system — on macOS/Linux a path starts with '/', which
 // the command-line config provider would otherwise try to parse as a switch.
@@ -41,6 +62,7 @@ if (repoArg is not null) opt.ControlRepoPath = repoArg;   // bare arg wins
 builder.Services.AddSingleton(opt);
 builder.Services.AddSingleton<RelayHub>();
 builder.Services.AddSingleton<RelayKeyStore>();
+builder.Services.AddSingleton<ControlSigning>();
 builder.Services.AddSingleton<ControlRepo>();
 builder.Services.AddSingleton<LoginLockout>();
 
@@ -290,6 +312,17 @@ app.MapPost("/api/remote-session", async (ScreenshotApiRequest req, ControlRepo 
     try
     {
         var result = await r.StartRemoteSessionAsync(req.MachineId, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
+// The operator vouches for the control files as they are on main now, and signs them.
+app.MapPost("/api/sign", async (ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.SignNowAsync(ct);
         return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
     }
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }

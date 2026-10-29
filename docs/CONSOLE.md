@@ -55,6 +55,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:MainBranch` | Branch with `manifest.json` + `fleet.json` | `main` |
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
+| `Console:SigningKeyPath` | Your private signing key for [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended) | *(your user profile; made by `-- signing-key`)* |
 | `Urls` | Address the UI listens on | `http://localhost:5080` |
 
 ## Using it

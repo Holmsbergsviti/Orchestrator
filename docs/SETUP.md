@@ -47,6 +47,43 @@ GitHub → Settings → Developer settings → Personal access tokens.
 On its first heartbeat each agent auto-creates the **`fleet-state`** branch and writes
 `state/<machineId>.json` to it. You don't need to create that branch yourself.
 
+## 3a. Sign the control files (strongly recommended)
+Every machine stores its token in plain text, and a token that can write heartbeats can also
+push to `main`. Without signing, one token copied off one machine could rewrite
+`manifest.json`, `commands.json` or `agent.json` and have **every** machine run something as
+SYSTEM. With signing, machines ignore any of those files that you didn't sign, so a stolen
+token can at most fake a heartbeat.
+
+How it works: your console holds a private key (on your computer, never in git) and signs
+`manifest.json` and `commands.json` whenever it saves them. The publish workflow signs
+`agent.json` with the same key, and bakes the **public** key into every agent build — so
+machines learn it through the normal self-update, with nothing to reinstall.
+
+Set it up once, **before** merging the change that introduces it (or any later agent build):
+
+1. On the computer you run the console on:
+   ```bash
+   dotnet run --project src/Orchestrator.Console -- signing-key
+   ```
+   It creates the key (in your user profile) and prints it.
+2. In the **code** repo → Settings → Secrets and variables → Actions → **New repository
+   secret**: name `AGENT_SIGNING_KEY`, value = the printed key, including the
+   `BEGIN`/`END` lines.
+3. Start the console. It shows a **Sign manifest.json + commands.json** button: press it once
+   to sign what's there today.
+4. Push/merge to `main` as usual. The workflow summary says "Signed control files:
+   **enforced**", and machines pick that build up on their next sync.
+
+Back up the key file it printed the path of. If you lose it, run step 1 on a new computer,
+replace the secret, sign again, and let the fleet update. Anyone who has it can command your
+fleet, so treat it like a password.
+
+**After this, edit through the console.** If you hand-edit `manifest.json` or `commands.json`,
+machines ignore it until you open the console and press **Sign** (it shows who changed the
+file, so you can tell your own edit from someone else's). The console also refuses to save on
+top of an unsigned change, because saving signs the whole file. Programs need a `checksum`
+in signed mode; the console's **Add a program** computes it for you.
+
 ## 4. Install on each target (Administrator PowerShell)
 ```powershell
 .\scripts\install.ps1 `
@@ -197,7 +234,8 @@ That covers a build that won't run. It does **not** cover a build that runs fine
 wrong thing — for that you still need the brakes:
 
 - **`"enabled": false` in `agent.json`** — set it in the control repo and every machine stops
-  updating on its next sync, without unpublishing anything.
+  updating on its next sync, without unpublishing anything. (With signed control files, any
+  hand edit to `agent.json` invalidates its signature, which stops updates just the same.)
 - **`-AutoUpdate $false`** at install time pins one machine to its current build. Useful to keep
   one known-good machine out of an update while you check a new build on another.
 

@@ -34,6 +34,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly IConfigService _configService;     // config + machine state
     private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
     private readonly IRelayIdentity _relayIdentity;     // signs remote sessions so the relay knows it's really us
+    private readonly IControlFileVerifier _verifier;    // whether signed mode (mandatory checksums) is on
     private readonly ILogger<SyncService> _log;         // logger
     private readonly OrchestratorConfig _config;        // our settings
 
@@ -47,6 +48,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         IConfigService configService,
         IFleetReporter fleetReporter,
         IRelayIdentity relayIdentity,
+        IControlFileVerifier verifier,
         ILogger<SyncService> log)   // all dependencies handed in by DI
     {
         _github = github;                   // store each collaborator
@@ -58,6 +60,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
         _configService = configService;
         _fleetReporter = fleetReporter;
         _relayIdentity = relayIdentity;
+        _verifier = verifier;
         _config = configService.Config;     // grab the settings for convenience
         _log = log;
     }
@@ -77,7 +80,10 @@ public sealed class SyncService : ISyncService   // the actual implementation
             if (remote is null)   // download/parse failed?
             {
                 record.Success = false;                                             // mark this cycle as failed
-                record.Errors.Add("Manifest fetch failed; keeping current state."); // note why
+                // Say WHY when it's a signature refusal: that's the one the operator has to act on.
+                record.Errors.Add(_github.LastRejection is { } why
+                    ? $"Manifest refused: {why}"
+                    : "Manifest fetch failed; keeping current state.");
                 _log.LogWarning("Manifest unavailable — skipping cycle, will retry next interval");
                 // Fall through to reporting/Finish so the heartbeat still shows this machine is alive.
             }
@@ -195,6 +201,12 @@ public sealed class SyncService : ISyncService   // the actual implementation
             ? $"Updating {p.Name} v{action.PreviousVersion} -> v{p.Version}"   // nicer wording for updates
             : $"Installing {p.Name} v{p.Version}";                            // vs. fresh installs
         _log.LogInformation("{Verb}", verb);
+
+        // With signing on, the manifest's checksum is the ONLY thing vouching for the file: the
+        // binary itself sits in the repo, where a copied token could replace it.
+        if (_verifier.Enforced && p.NormalizedChecksum is null)
+            throw new InvalidOperationException(
+                $"{p.Name} has no checksum in the manifest, and signed mode requires one. Re-add it from the console (it computes one).");
 
         var bytes = await _github.DownloadFileAsync(p, ct);   // download the file from GitHub
         _log.LogInformation("Downloaded {Kb:N1} KB", bytes.Length / 1024.0);
