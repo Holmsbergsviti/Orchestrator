@@ -34,6 +34,9 @@ public sealed class ConsoleOptions
     /// <summary>Where the operator's private signing key lives. Blank = per-user app data
     /// (see ControlSigning.DefaultKeyPath). Never inside a repo.</summary>
     public string SigningKeyPath { get; set; } = "";
+    /// <summary>The clone of the CODE repo the console runs from, for the Update button. Blank =
+    /// found by walking up from where the console is running.</summary>
+    public string CodeRepoPath { get; set; } = "";
 }
 
 // ---- wire models (what the web page receives / sends) --------------------------------

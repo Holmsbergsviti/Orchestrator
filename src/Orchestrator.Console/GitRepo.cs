@@ -89,6 +89,30 @@ public sealed class GitRepo(string repoPath)
         await RunAsync(ct, "merge", "--ff-only", $"{remote}/{branch}");
     }
 
+    /// <summary>The branch checked out now, or null when HEAD is detached.</summary>
+    public string? CurrentBranch()
+        => TryRun(out var o, out _, "symbolic-ref", "--short", "-q", "HEAD") && !string.IsNullOrWhiteSpace(o) ? o.Trim() : null;
+
+    /// <summary>Subjects of the commits on <paramref name="theirs"/> that <paramref name="mine"/> doesn't have,
+    /// newest first ("what would I get by updating?").</summary>
+    public IReadOnlyList<string> CommitsBehind(string mine, string theirs)
+        => TryRun(out var o, out _, "log", "--format=%s", $"{mine}..{theirs}")
+            ? o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : Array.Empty<string>();
+
+    /// <summary>True when <paramref name="mine"/> has commits that <paramref name="theirs"/> doesn't.</summary>
+    public bool HasCommitsNotIn(string mine, string theirs)
+        => TryRun(out var o, out _, "rev-list", "--count", $"{theirs}..{mine}") && int.TryParse(o.Trim(), out var n) && n > 0;
+
+    /// <summary>Paths that differ between two revisions.</summary>
+    public IReadOnlyList<string> ChangedPaths(string from, string to)
+        => TryRun(out var o, out _, "diff", "--name-only", from, to)
+            ? o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : Array.Empty<string>();
+
+    /// <summary>The full SHA HEAD points at now, or null when it can't be read (synchronous twin of <see cref="HeadAsync"/>).</summary>
+    public string? Head() => TryRun(out var o, out _, "rev-parse", "HEAD") ? o.Trim() : null;
+
     /// <summary>The full SHA HEAD points at now.</summary>
     public async Task<string> HeadAsync(CancellationToken ct) => (await RunAsync(ct, "rev-parse", "HEAD")).Trim();
 

@@ -56,6 +56,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
 | `Console:SigningKeyPath` | Your private signing key for [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended) | *(your user profile; made by `-- signing-key`)* |
+| `Console:CodeRepoPath` | The clone of the *code* repo the console runs from, for [updating](#updating-the-console) | *(found automatically by walking up from where it runs)* |
 | `Urls` | Address the UI listens on | `http://localhost:5080` |
 
 ## Using it
@@ -140,6 +141,27 @@ Targets are written as **hostnames**, so `manifest.json` stays human-readable
 (`"target": ["olegs-laptop", "desktop-abc123"]`). The grid shows your friendly labels; the
 manifest stores the machine's real hostname. (Note: if two machines share a hostname, a
 hostname target hits both — rename one to disambiguate.)
+
+## Updating the console
+The console checks GitHub for newer console code when the page loads and every few minutes
+after. When there is some, a **red bar** runs across the top and a **full-screen "New version
+available" overlay** lists what changed and asks you to upgrade before you carry on. Press
+**Update now** (or the **Update** button in the header any time) and it pulls for you.
+
+- It only ever **fast-forwards** to `origin/main`. If your code clone has uncommitted changes,
+  or commits that never reached GitHub, it **refuses and leaves them alone**, saying how to
+  sort it out (`git status`, or `git pull --rebase origin main`).
+- If the update fails, the overlay offers **Keep using the old version for now**, so a broken
+  clone can't lock you out of your fleet; the red bar stays until you do upgrade.
+- The overlay waits while you have unsaved edits (the red bar shows meanwhile), so it never
+  eats your work.
+- It tells you what comes next: a change to the page alone reloads it for you; a change to the
+  console's own code shows **Restart required** (stop it with Ctrl+C and start it again) and
+  stays until you have. That doesn't depend on the page: pulling by hand with `git pull` shows
+  it too.
+- This is the *console's* update. Agents update themselves from the published build; nothing
+  here touches the control repo. Not running from a git clone (a copied folder)? There is
+  nothing to pull, and the flag never shows.
 
 ## How machines appear
 Each agent commits `state/<machineId>.json` to the `fleet-state` branch when its situation

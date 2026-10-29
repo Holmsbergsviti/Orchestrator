@@ -164,6 +164,13 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
   rejected push (`PushRejectedException`) is retried once from a fresh fetch, and all writes run under one gate
   (`ControlRepo.MutateAsync`). New write operations must go through `MutateAsync` and `CommitSignedAsync`.
 
+- **The console updates itself (`ConsoleUpdater`).** It finds the code clone it runs from (walks up to
+  the `.git` + `Orchestrator.sln` folder, or `Console:CodeRepoPath`), reports commits behind `origin/main`,
+  and on request fast-forwards — refusing a dirty tree or local commits not on GitHub, never merging. The page
+  shows a red bar + blocking overlay when behind (held back while there are unsaved edits; after a failed update
+  an escape hatch is offered so a broken clone can't lock the operator out). "Restart needed" is computed from
+  the commit the *process started at* vs HEAD, so it survives page reloads and manual `git pull`s.
+
 ## Conventions
 
 - Every source file opens with a plain-language "FILE PURPOSE" comment block, and lines carry inline
