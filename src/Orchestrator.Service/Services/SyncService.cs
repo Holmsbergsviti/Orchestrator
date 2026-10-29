@@ -32,6 +32,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private readonly IScheduledTaskService _scheduledTasks;  // schedules interactive one-time runs (run-now, screenshot capture)
     private readonly ISelfUpdateService _selfUpdate;    // keeps the agent's own binary current
     private readonly IConfigService _configService;     // config + machine state
+    private bool _uninstalling;                          // set once an uninstall is scheduled: stop reporting and updating
     private readonly IFleetReporter _fleetReporter;     // reports this machine's state back to GitHub
     private readonly IRelayIdentity _relayIdentity;     // signs remote sessions so the relay knows it's really us
     private readonly IControlFileVerifier _verifier;    // whether signed mode (mandatory checksums) is on
@@ -169,13 +170,14 @@ public sealed class SyncService : ISyncService   // the actual implementation
             _log.LogError(ex, "Sync cycle failed");
         }
 
-        await _fleetReporter.ReportAsync(record, ct);   // tell GitHub our state (best-effort; never throws)
+        // (Not when this agent has just been told to uninstall itself: its heartbeat was removed on purpose.)
+        if (!_uninstalling) await _fleetReporter.ReportAsync(record, ct);   // tell GitHub our state (best-effort; never throws)
 
         // Update the agent itself LAST: this can schedule a task that stops this very service,
         // so everything above (programs applied, commands run, heartbeat sent) needs to have
         // finished first. Never allowed to fail the cycle — a broken update must not stop a
         // machine from syncing programs.
-        try { await _selfUpdate.CheckAndUpdateAsync(ct); }
+        try { if (!_uninstalling) await _selfUpdate.CheckAndUpdateAsync(ct); }
         catch (Exception ex) { _log.LogWarning(ex, "Self-update check failed"); }
 
         return Finish(record, sw);   // wrap up (timing, history, logs) and return the record
@@ -361,6 +363,8 @@ public sealed class SyncService : ISyncService   // the actual implementation
             if (OneShotExpiry.IsExpired(cmd.ExpiresUtc, cmd.RequestedUtc, OneShotExpiry.CommandMaxAge, DateTimeOffset.UtcNow))
                 _log.LogWarning("Skipping {Action} command (id {Id}): requested {Requested}, too old to act on now",
                     cmd.Action, cmd.Id, cmd.RequestedUtc ?? "?");   // consumed, never run
+            else if (string.Equals(cmd.Action?.Trim(), "uninstall", StringComparison.OrdinalIgnoreCase))
+                await UninstallAgentAsync(cmd, machine, ct);
             else
                 ExecuteCommand(cmd);
         }
@@ -465,6 +469,47 @@ public sealed class SyncService : ISyncService   // the actual implementation
     private static void Trim(List<string> list, int max)
     {
         if (list.Count > max) list.RemoveRange(0, list.Count - max);
+    }
+
+    /// <summary>The operator removed this machine in the console and asked for the agent to go too.
+    /// Schedules the uninstall script as a one-time SYSTEM task (the service can't delete its own
+    /// folder or service entry while running), then takes this machine's heartbeat off GitHub so it
+    /// leaves the console's list, and stops reporting. Order matters: if the uninstall can't be
+    /// scheduled, the heartbeat stays, so the machine doesn't vanish while still installed.</summary>
+    private async Task UninstallAgentAsync(MachineCommand cmd, MachineConfig machine, CancellationToken ct)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string? script = null;
+        try
+        {
+            script = InstalledScripts.ExtractToTemp("uninstall-agent.ps1")
+                ?? throw new FileNotFoundException("uninstall-agent.ps1 isn't embedded in this build.");
+            _log.LogWarning("Uninstalling this agent as the operator asked (command id {Id})", cmd.Id);
+            _scheduledTasks.RunSystemOnce(
+                taskName: _config.RegistryEntryPrefix + "uninstall",
+                command: "powershell.exe",
+                arguments: $"-ExecutionPolicy Bypass -NoProfile -File \"{script}\" -ServiceName \"{OrchestratorDefaults.Instance.ServiceName}\" " +
+                           $"-InstallRoot \"{_config.RootPath}\" -RunKey \"{_config.StartupRegistryKey}\" -EntryPrefix \"{_config.RegistryEntryPrefix}\"",
+                delay: TimeSpan.FromSeconds(30));   // long enough for this cycle to finish and the heartbeat to go
+            script = null;   // the script deletes itself once it has run
+            _uninstalling = true;   // no heartbeat or self-update from here on
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Could not schedule the uninstall; leaving this agent installed");
+            if (script is not null) try { File.Delete(script); } catch { /* temp cleanup */ }
+            return;
+        }
+
+        try
+        {
+            await _github.DeleteFileAsync($"state/{machine.MachineId}.json", _config.FleetStateBranch,
+                $"agent uninstalled: {machine.Hostname} ({machine.MachineId})", ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Uninstall is scheduled, but this machine's heartbeat couldn't be removed; use Forget in the console once it is gone");
+        }
     }
 
     private void ExecuteCommand(MachineCommand cmd)

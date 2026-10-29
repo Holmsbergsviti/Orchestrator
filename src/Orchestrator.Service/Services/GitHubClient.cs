@@ -45,6 +45,9 @@ public interface IGitHubClient   // the contract for GitHub access
     /// <summary>Ensure <paramref name="branch"/> exists, creating it from <paramref name="baseBranch"/> if missing. Returns false if it couldn't be ensured.</summary>
     Task<bool> EnsureBranchAsync(string branch, string baseBranch, CancellationToken ct = default);
 
+    /// <summary>Delete a file from a branch. A file that is already gone counts as deleted.</summary>
+    Task DeleteFileAsync(string repoPath, string branch, string commitMessage, CancellationToken ct = default);
+
     /// <summary>Create or update a file on a branch. Pass the current <paramref name="sha"/> to update, or null to create.</summary>
     Task PutFileAsync(string repoPath, byte[] content, string branch, string commitMessage, string? sha, CancellationToken ct = default);
 }
@@ -310,6 +313,22 @@ public sealed class GitHubClient : IGitHubClient
         };
         using var resp = await client.SendAsync(req, ct);
         ThrowIfForbidden(resp, $"write '{repoPath}'");
+        resp.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteFileAsync(string repoPath, string branch, string commitMessage, CancellationToken ct = default)
+    {
+        var sha = await GetFileShaAsync(repoPath, branch, ct);
+        if (sha is null) return;   // nothing there: already what was asked for
+
+        var client = _httpFactory.CreateClient(HttpClientName);
+        var body = new Dictionary<string, string?> { ["message"] = commitMessage, ["sha"] = sha, ["branch"] = branch };
+        using var req = new HttpRequestMessage(HttpMethod.Delete, $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{EncodePath(repoPath)}")
+        {
+            Content = JsonContent(body)
+        };
+        using var resp = await client.SendAsync(req, ct);
+        ThrowIfForbidden(resp, $"delete '{repoPath}'");
         resp.EnsureSuccessStatusCode();
     }
 

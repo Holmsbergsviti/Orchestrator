@@ -144,6 +144,21 @@ Targets are written as **hostnames**, so `manifest.json` stays human-readable
 manifest stores the machine's real hostname. (Note: if two machines share a hostname, a
 hostname target hits both — rename one to disambiguate.)
 
+## Removing a machine
+**Remove…** (bottom of a machine's Power buttons) asks which of two things you mean:
+- **Uninstall the agent from this PC and remove it.** Sends a signed `uninstall` command. On its next
+  sync the agent schedules a one-time SYSTEM task that deletes its Windows service, the scheduled
+  tasks and startup entries it made, and its install folder (`C:\Windows\Orch`), takes its own
+  heartbeat off GitHub (so it leaves this list) and stops reporting or updating. The PC has to be
+  switched on within **an hour**: the command is deliberately short-lived, so a PC you reinstall later
+  can't find an old one waiting for it. If it was missed, the machine is still listed; press it again.
+  Programs the agent installed *outside* its own folder are not touched; take the PC out of their
+  targeting first (and let it sync) if you want them gone too.
+- **Only remove it from this list.** Deletes that machine's heartbeat and screenshots from the
+  `fleet-state` branch and forgets its remote-control key. Nothing happens on the PC: for machines
+  that are gone for good (a wiped VM, a duplicate left by a reinstall). An agent that is still
+  running reports again and comes back.
+
 ## Updating the console
 The console checks GitHub for newer console code when the page loads and every few minutes
 after. When there is some, a **red bar** runs across the top and a **full-screen "New version

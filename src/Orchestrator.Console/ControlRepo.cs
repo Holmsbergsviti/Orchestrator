@@ -169,6 +169,12 @@ public sealed class CommandRequest
     [JsonPropertyName("action")] public string Action { get; set; } = "";
 }
 
+/// <summary>Request to take a machine off the console's list.</summary>
+public sealed class ForgetRequest
+{
+    [JsonPropertyName("machineId")] public string MachineId { get; set; } = "";
+}
+
 /// <summary>Request to Wake-on-LAN one or more machines.</summary>
 public sealed class WakeApiRequest
 {
@@ -260,6 +266,7 @@ public sealed class ControlRepo
     // A restart/shutdown is still wanted when a machine that was briefly offline returns;
     // a screenshot or wake is only useful while the operator is waiting for it.
     private static readonly TimeSpan CommandValidFor = TimeSpan.FromHours(24);
+    private static readonly TimeSpan UninstallValidFor = TimeSpan.FromHours(1);
     private static readonly TimeSpan ScreenshotValidFor = TimeSpan.FromHours(1);
     private static readonly TimeSpan WakeValidFor = TimeSpan.FromHours(1);
     /// <summary>Extra time the relay waits beyond that, for an agent that HAS picked the request
@@ -611,7 +618,7 @@ public sealed class ControlRepo
     {
         if (string.IsNullOrWhiteSpace(machineId)) return Fail("Machine id is required.");
         action = (action ?? string.Empty).Trim().ToLowerInvariant();
-        if (action is not ("shutdown" or "restart")) return Fail("Action must be 'shutdown' or 'restart'.");
+        if (action is not ("shutdown" or "restart" or "uninstall")) return Fail("Action must be 'shutdown', 'restart' or 'uninstall'.");
 
         var err = await PrepareCleanMainAsync(ct);
         if (err is not null) return Fail(err);
@@ -627,7 +634,9 @@ public sealed class ControlRepo
             ["action"] = action,
             ["id"] = Guid.NewGuid().ToString("N"),   // fresh nonce = run once on the target
             ["requestedUtc"] = DateTimeOffset.UtcNow.ToString("O"),
-            ["expiresUtc"] = DateTimeOffset.UtcNow.Add(CommandValidFor).ToString("O")   // stale after this
+            // Uninstall is short-lived on purpose: a machine reinstalled later, which has forgotten which
+            // commands it already ran, must not find an old one waiting and remove its fresh agent.
+            ["expiresUtc"] = DateTimeOffset.UtcNow.Add(action == "uninstall" ? UninstallValidFor : CommandValidFor).ToString("O")   // stale after this
         };
         File.WriteAllText(full, root.ToJsonString(JsonWrite));
 
@@ -635,9 +644,54 @@ public sealed class ControlRepo
         {
             var sha = await CommitSignedAsync(
                 $"console: {action} {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
-            return new SaveResult { Ok = true, Message = $"{action} sent — runs on the machine's next sync (~1 cycle, 15s delay).", Commit = sha };
+            return new SaveResult
+            {
+                Ok = true,
+                Commit = sha,
+                Message = action == "uninstall"
+                    ? "Uninstall sent: the agent removes itself on the machine's next sync (the PC has to be on within the hour), then it leaves this list."
+                    : $"{action} sent — runs on the machine's next sync (~1 cycle, 15s delay)."
+            };
         }
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
+    }
+
+    /// <summary>Take a machine off the console's list: delete its heartbeat (and screenshots) from the
+    /// fleet-state branch, and forget its remote-control key. This does NOT touch the PC itself: an
+    /// agent that is still running reports again and reappears; use the uninstall command to remove it.
+    /// For machines that are gone for good (a wiped VM, a duplicate after a reinstall).</summary>
+    public async Task<SaveResult> ForgetMachineAsync(string machineId, CancellationToken ct)
+    {
+        // The id becomes part of a path in the repo, so it has to look like the ids agents generate.
+        if (string.IsNullOrWhiteSpace(machineId) || !System.Text.RegularExpressions.Regex.IsMatch(machineId, @"^[A-Za-z0-9._\-]{1,128}$") || machineId.Contains(".."))
+            return Fail("That isn't a machine id.");
+
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            await _git.FetchAsync(_opt.Remote, ct);   // read the machine's name from what GitHub holds now
+            var host = ReadHeartbeats().FirstOrDefault(h => string.Equals(h.MachineId, machineId, StringComparison.OrdinalIgnoreCase))?.Hostname;
+            bool removed;
+            try
+            {
+                removed = await _git.RemovePathsOnRemoteBranchAsync(_opt.Remote, _opt.FleetStateBranch,
+                    new[] { $"{StateDir}/{machineId}.json", $"screenshots/{machineId}" },
+                    $"console: removed machine {host ?? machineId} ({machineId})", ct);
+            }
+            catch (GitException ex) { return Fail($"Couldn't remove it from GitHub: {ex.Message}"); }
+
+            try { _keys.Unpin(machineId); }
+            catch (InvalidOperationException) { /* an unreadable pin file is reported elsewhere; it doesn't block removal */ }
+            await _git.FetchAsync(_opt.Remote, ct);   // so the very next page load already lacks it
+            return new SaveResult
+            {
+                Ok = true,
+                Message = removed
+                    ? "Removed from the list. If its agent is still running it will report again and come back; use Uninstall to remove the agent."
+                    : "It was already gone from the list."
+            };
+        }
+        finally { _writeGate.Release(); }
     }
 
     /// <summary>Queue Wake-on-LAN requests for the given machines (by their reported MAC), then push.</summary>

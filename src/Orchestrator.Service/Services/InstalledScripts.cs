@@ -56,6 +56,18 @@ public static class InstalledScripts
         }
     }
 
+    /// <summary>Copy an embedded script to a fresh temp file and return its path (null if there is no
+    /// such script). Used for scripts that must run from OUTSIDE the install folder, because they
+    /// delete it.</summary>
+    public static string? ExtractToTemp(string name)
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("scripts/" + name);
+        if (stream is null) return null;
+        var path = Path.Combine(Path.GetTempPath(), $"orch-{Path.GetFileNameWithoutExtension(name)}-{Guid.NewGuid():N}.ps1");
+        using (var file = File.Create(path)) stream.CopyTo(file);
+        return path;
+    }
+
     private static bool SamePath(string a, string b)
         => string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 }

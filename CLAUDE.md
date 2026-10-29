@@ -178,6 +178,14 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
   an escape hatch is offered so a broken clone can't lock the operator out). "Restart needed" is computed from
   the commit the *process started at* vs HEAD, so it survives page reloads and manual `git pull`s.
 
+- **Removing a machine.** "Forget" (`ControlRepo.ForgetMachineAsync`) deletes `state/<id>.json` and
+  `screenshots/<id>` from the `fleet-state` branch via a scratch clone (`GitRepo.RemovePathsOnRemoteBranchAsync`;
+  the branch is never checked out here, and a lost push race restarts from a fresh clone). "Uninstall" is a
+  `commands.json` action that expires in 1 hour on purpose (a reinstalled machine forgets which commands it ran,
+  so a long-lived one could remove its fresh agent). The agent handles it in `SyncService.UninstallAgentAsync`:
+  schedule `uninstall-agent.ps1` (embedded, extracted to temp, so it can delete its own folder) as a SYSTEM task,
+  *then* delete its own heartbeat, then skip heartbeat/self-update for the rest of the cycle.
+
 ## Conventions
 
 - Every source file opens with a plain-language "FILE PURPOSE" comment block, and lines carry inline

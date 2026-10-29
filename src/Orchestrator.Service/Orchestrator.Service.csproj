@@ -80,6 +80,10 @@
     <EmbeddedResource Include="..\..\scripts\update-agent.ps1">
       <LogicalName>scripts/update-agent.ps1</LogicalName>
     </EmbeddedResource>
+    <!-- Run by the agent itself to remove itself when the operator asks (see UninstallAgent in SyncService). -->
+    <EmbeddedResource Include="..\..\scripts\uninstall-agent.ps1">
+      <LogicalName>scripts/uninstall-agent.ps1</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- The operator's PUBLIC signing key, passed in by publish-agent.yml as

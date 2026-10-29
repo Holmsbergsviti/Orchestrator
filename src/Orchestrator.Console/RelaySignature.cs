@@ -116,6 +116,17 @@ public sealed class RelayKeyStore
         _log.LogWarning("relay: operator re-trusted a CHANGED remote-control key for machine {MachineId}", machineId);
     }
 
+    /// <summary>Forget a machine's pin, because the operator removed the machine: a reinstalled one is
+    /// then pinned afresh the next time it reports, instead of needing "Trust new key".</summary>
+    public void Unpin(string machineId)
+    {
+        lock (_lock)
+        {
+            var pins = Load();
+            if (pins.Remove(machineId)) Save(pins);
+        }
+    }
+
     private Dictionary<string, string> Load()
     {
         if (_pins is not null) return _pins;
