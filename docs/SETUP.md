@@ -55,8 +55,9 @@ GitHub can't tell your token from an agent's while both belong to you, so the ag
 account of their own, and `main` only accepts pushes from you.
 
 1. **Create a second GitHub account** for the agents (e.g. `<you>-fleet`). Free is fine.
-2. In the **control repo** → Settings → Collaborators → **Add people** → the bot account, role
-   **Write**. Accept the invite while signed in as the bot.
+2. In the **control repo** → Settings → Collaborators → **Add people** → the bot account (on a
+   personal account's repo every collaborator gets write access; in an org, pick **Write**).
+   Accept the invite while signed in as the bot.
 3. As the **bot**, create a **classic** token with the `repo` scope (fine-grained tokens can't
    reach a repo owned by another personal account). The bot has access to nothing but this repo,
    so `repo` means just that.
@@ -67,6 +68,9 @@ account of their own, and `main` only accepts pushes from you.
    - Target branches → **Include default branch**.
    - Rules: **Restrict updates**, **Restrict deletions**, **Block force pushes**.
    - Leave `fleet-state` alone — agents write their heartbeats there.
+   - **Check for a banner saying the ruleset won't be enforced.** GitHub only enforces rulesets
+     on *private* repos for paid plans (Pro, Team, Enterprise). On the free plan the rule is
+     saved but does nothing — and the bot, as a collaborator, could still push `main`.
 5. Reinstall each machine with the bot's token. Everything else is kept:
    ```powershell
    .\scripts\install.ps1 -Token ghp_bot_xxx
