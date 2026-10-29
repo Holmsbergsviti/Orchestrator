@@ -4,6 +4,11 @@
   fleet + program list from the local server, lets you rename machines and tick which
   machines run which program (a grid of checkboxes), and saves your changes back to
   GitHub. All CSS/JS is inline so it needs nothing from the internet.
+
+  The look is a green-on-black terminal with a faint rain of 0s and 1s behind the page.
+  That rain is pure decoration: a fixed canvas that never takes clicks, runs at a low
+  frame rate, pauses while the tab is hidden, and stays still for anyone whose system asks
+  for reduced motion.
 -->
 <html lang="en">
 <head>
@@ -11,89 +16,135 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Orchestrator Console</title>
   <style>
+    /* "Terminal" theme: green phosphor on black, monospace everywhere, with a faint rain of
+       0s and 1s behind the page (the #rain canvas, drawn by the script at the bottom). Every
+       colour comes from these variables, so the whole look can be retuned in one place. */
     :root {
-      --bg: #f6f7f9; --card: #fff; --ink: #1b1f24; --muted: #6b7280;
-      --line: #e5e7eb; --accent: #2563eb; --ok: #16a34a; --off: #9ca3af;
-      --err: #dc2626; --okbg: #ecfdf5; --errbg: #fef2f2;
+      --bg: #020803; --card: rgba(3, 18, 8, .86); --ink: #b8ffcc; --muted: #4f9e66;
+      --line: #0f3d1f; --accent: #00ff66; --ok: #00ff66; --off: #2f5c3d;
+      --err: #ff3b5c; --okbg: rgba(0, 255, 102, .08); --errbg: rgba(255, 59, 92, .1);
+      --warn: #e6ff4d; --glow: 0 0 6px rgba(0, 255, 102, .55);
+      --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+      color-scheme: dark;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-           background: var(--bg); color: var(--ink); }
-    header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-             padding: 14px 20px; background: var(--card); border-bottom: 1px solid var(--line); }
-    header h1 { font-size: 16px; margin: 0; }
+    body { margin: 0; font: 13px/1.55 var(--mono); background: var(--bg); color: var(--ink);
+           accent-color: var(--accent); min-height: 100vh; }
+    /* The 0/1 rain sits behind everything and never takes a click. */
+    #rain { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; opacity: .32; }
+    /* CRT scanlines over the whole page — subtle enough not to cost readability. */
+    body::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 10;
+                  background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.16) 2px 3px); }
+    ::selection { background: var(--accent); color: #000; }
+    header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5;
+             padding: 12px 20px; background: rgba(1, 10, 4, .92); border-bottom: 1px solid var(--line);
+             box-shadow: 0 1px 18px rgba(0, 255, 102, .08); backdrop-filter: blur(3px); }
+    header h1 { font-size: 15px; margin: 0; color: var(--accent); text-shadow: var(--glow); letter-spacing: .08em; text-transform: uppercase; }
+    header h1::before { content: '> '; color: var(--muted); }
+    header h1::after { content: '_'; animation: blink 1.1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
     header .repo { color: var(--muted); font-size: 12px; }
+    header .repo::before { content: '[repo] '; }
     header .spacer { flex: 1; }
-    button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink);
-             padding: 7px 14px; border-radius: 8px; cursor: pointer; }
-    button:hover { border-color: #cbd0d6; }
-    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    button.danger { color: var(--err); border-color: #fecaca; }
-    button.danger:hover { background: var(--errbg); border-color: var(--err); }
-    button.primary:disabled { opacity: .5; cursor: default; }
+    button { font: inherit; border: 1px solid var(--line); background: rgba(0, 0, 0, .55); color: var(--ink);
+             padding: 6px 13px; border-radius: 3px; cursor: pointer; transition: border-color .12s, box-shadow .12s, color .12s; }
+    button:hover { border-color: var(--accent); color: var(--accent); box-shadow: var(--glow); }
+    button:focus-visible, .fld:focus-visible, .search:focus-visible, input.label:focus-visible, summary:focus-visible {
+      outline: 1px solid var(--accent); outline-offset: 1px; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #001a09; font-weight: 700; }
+    button.primary:hover { color: #001a09; box-shadow: 0 0 14px rgba(0, 255, 102, .7); }
+    button.danger { color: var(--err); border-color: rgba(255, 59, 92, .45); }
+    button.danger:hover { background: var(--errbg); border-color: var(--err); color: var(--err); box-shadow: 0 0 8px rgba(255, 59, 92, .5); }
+    button.primary:disabled { opacity: .35; cursor: default; box-shadow: none; }
     main { padding: 20px; max-width: 1100px; margin: 0 auto; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-            padding: 16px 18px; margin-bottom: 20px; }
-    .card h2 { font-size: 14px; margin: 0 0 12px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 4px;
+            padding: 16px 18px; margin-bottom: 20px; box-shadow: inset 0 0 24px rgba(0, 255, 102, .035); }
+    .card h2 { font-size: 13px; margin: 0 0 12px; color: var(--accent); text-transform: uppercase; letter-spacing: .1em; text-shadow: var(--glow); }
+    .card h2::before { content: '// '; color: var(--muted); text-shadow: none; }
     .muted { color: var(--muted); }
-    .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e;
-            padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; font-size: 13px; }
+    .warn { background: rgba(230, 255, 77, .06); border: 1px solid rgba(230, 255, 77, .35); color: var(--warn);
+            padding: 8px 12px; border-radius: 3px; margin-bottom: 10px; font-size: 12px; }
+    .warn::before { content: '[!] '; }
     table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-    th { font-size: 12px; color: var(--muted); font-weight: 600; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    tbody tr:hover td { background: rgba(0, 255, 102, .045); }
+    th { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
-    .dot.on { background: var(--ok); } .dot.off { background: var(--off); }
-    .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); }
-    .pill.ok { background: var(--okbg); color: var(--ok); border-color: #a7f3d0; }
-    .pill.bad { background: var(--errbg); color: var(--err); border-color: #fecaca; }
-    input.label { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; width: 160px; }
-    details.add summary { cursor: pointer; font-size: 14px; font-weight: 600; list-style: none; }
+    .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: pulse 2.4s ease-in-out infinite; }
+    .dot.off { background: var(--off); }
+    @keyframes pulse { 50% { box-shadow: 0 0 2px var(--ok); } }
+    .pill { font-size: 11px; padding: 0 7px; border-radius: 2px; border: 1px solid var(--line); }
+    .pill.ok { background: var(--okbg); color: var(--ok); border-color: rgba(0, 255, 102, .4); }
+    .pill.bad { background: var(--errbg); color: var(--err); border-color: rgba(255, 59, 92, .45); }
+    input.label { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 3px; width: 160px; background: rgba(0,0,0,.5); color: var(--ink); }
+    details.add summary { cursor: pointer; font-size: 13px; font-weight: 600; list-style: none; color: var(--accent);
+                          text-transform: uppercase; letter-spacing: .1em; text-shadow: var(--glow); }
     details.add summary::-webkit-details-marker { display: none; }
-    details.add summary::before { content: '＋ '; color: var(--accent); }
-    details.add[open] summary::before { content: '– '; }
+    details.add summary::before { content: '[+] '; color: var(--accent); }
+    details.add[open] summary::before { content: '[-] '; }
     .addgrid { display: grid; grid-template-columns: 130px 1fr; gap: 10px 14px; align-items: center; margin-top: 16px; max-width: 660px; }
-    .addgrid > label { color: var(--muted); font-size: 13px; }
-    .fld { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; width: 100%; background: var(--card); color: var(--ink); }
+    .addgrid > label { color: var(--muted); font-size: 12px; }
+    .addgrid > label::after, .cfggrid > label::after { content: ':'; }
+    .fld { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 3px; width: 100%; background: rgba(0, 0, 0, .55); color: var(--ink); caret-color: var(--accent); }
+    .fld::placeholder, .search::placeholder { color: var(--off); }
     .flags { display: flex; gap: 16px; flex-wrap: wrap; }
-    .flags label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 13px; }
+    .flags label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 12px; }
     .addgrid .full { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
     .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-    .seg button { border: none; border-radius: 0; padding: 7px 14px; background: var(--card); }
+    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
+    .seg button { border: none; border-radius: 0; padding: 6px 13px; background: rgba(0, 0, 0, .55); }
+    .seg button:hover { box-shadow: none; }
     .seg button + button { border-left: 1px solid var(--line); }
-    .seg button.active { background: var(--accent); color: #fff; }
-    .search { font: inherit; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; min-width: 200px; background: var(--card); color: var(--ink); }
-    .titem { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; background: var(--card); }
-    .titem > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 11px 14px; }
+    .seg button.active { background: var(--accent); color: #001a09; font-weight: 700; }
+    .search { font: inherit; padding: 6px 11px; border: 1px solid var(--line); border-radius: 3px; min-width: 200px; background: rgba(0, 0, 0, .55); color: var(--ink); caret-color: var(--accent); }
+    .titem { border: 1px solid var(--line); border-radius: 3px; margin-bottom: 8px; background: rgba(0, 0, 0, .35); }
+    .titem:hover { border-color: rgba(0, 255, 102, .35); }
+    .titem > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
     .titem > summary::-webkit-details-marker { display: none; }
     .titem > summary::after { content: '▸'; color: var(--muted); }
     .titem[open] > summary::after { content: '▾'; }
-    .tname { font-weight: 600; }
-    .tid { font-size: 12px; }
-    .tsum { font-size: 12px; margin-left: auto; }
+    .tname { font-weight: 700; color: var(--accent); }
+    .tid { font-size: 11px; }
+    .tsum { font-size: 11px; margin-left: auto; }
     .tbody { padding: 8px 14px 14px; border-top: 1px solid var(--line); }
-    .allrow { display: flex; align-items: center; gap: 8px; margin: 6px 0 12px; font-size: 13px; }
+    .allrow { display: flex; align-items: center; gap: 8px; margin: 6px 0 12px; font-size: 12px; }
     .checklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 7px 16px; }
-    .checklist label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .checklist label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
     .cfg { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
-    .cfglabel { font-size: 12px; font-weight: 600; margin-bottom: 10px; }
+    .cfglabel { font-size: 11px; font-weight: 600; margin-bottom: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
     .cfggrid { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; align-items: center; max-width: 520px; margin-top: 12px; }
-    .cfggrid > label { font-size: 13px; }
+    .cfggrid > label { font-size: 12px; }
     .scroll { overflow-x: auto; }
     .matrix th.mcol { text-align: center; white-space: nowrap; }
     .matrix td.cell { text-align: center; }
     .matrix td.prog { white-space: nowrap; }
     .matrix .allbox { text-align: center; }
-    code { background: #f1f3f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-    #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-             background: #111827; color: #fff; padding: 10px 16px; border-radius: 10px;
-             font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+    a { color: var(--accent); }
+    a:hover { text-shadow: var(--glow); }
+    code { background: rgba(0, 255, 102, .08); color: var(--accent); padding: 1px 5px; border-radius: 2px; font-size: 12px; }
+    /* Agent-build readout in the Machines table (see the renderer in the script). */
+    .build-ok { color: var(--ok); } .build-pending { color: var(--warn); }
+    #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 20;
+             background: #000; color: var(--accent); border: 1px solid var(--accent); box-shadow: var(--glow);
+             padding: 9px 16px; border-radius: 3px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+    #toast::before { content: '$ '; color: var(--muted); }
     #toast.show { opacity: 1; }
-    #toast.err { background: var(--err); }
+    #toast.err { color: var(--err); border-color: var(--err); box-shadow: 0 0 8px rgba(255, 59, 92, .5); }
     .empty { color: var(--muted); padding: 12px 0; }
+    .empty::before { content: '-- '; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #010502; }
+    ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+    /* On a phone the header wraps to several lines, so pinning it would eat the screen. */
+    @media (max-width: 700px) { header { position: static; } }
+    @media (prefers-reduced-motion: reduce) {
+      header h1::after, .dot.on { animation: none; }
+    }
   </style>
 </head>
 <body>
+  <canvas id="rain" aria-hidden="true"></canvas>
   <header>
     <h1>Orchestrator Console</h1>
     <span class="repo" id="repo"></span>
@@ -233,10 +284,10 @@
         return el('span', { textContent: `${version} · ${short}`, title: 'No agent.json published, so there is nothing to compare against.' });
       }
       if (running === expected) {
-        return el('span', { textContent: `${version} · ${short}`, style: 'color:#15803d',
+        return el('span', { textContent: `${version} · ${short}`, className: 'build-ok',
           title: 'Running the published build.' });
       }
-      return el('span', { textContent: `${version} · ${short} (update pending)`, style: 'color:#b45309',
+      return el('span', { textContent: `${version} · ${short} (update pending)`, className: 'build-pending',
         title: `Running ${short}, but agent.json publishes ${expected.slice(0, 8)}. It should update on its next sync; if it stays like this, check that machine's log for "self-update:".` });
     }
 
@@ -692,6 +743,64 @@
 
     fetch('/api/info').then(r => r.json()).then(i => { $('#repo').textContent = i.repoPath; }).catch(() => {});
     load();
+  </script>
+  <script>
+    // ---- 0/1 rain behind the page (decoration only) ------------------------------------
+    // Columns of binary digits fall down a fixed canvas, each leaving a fading trail. Kept
+    // separate from the app script above so it can't interfere with it, and kept cheap: it
+    // redraws ~20 times a second, skips frames while the tab is hidden, and draws a single
+    // still frame instead of animating when the OS asks for reduced motion.
+    (() => {
+      const canvas = document.getElementById('rain');
+      const ctx = canvas.getContext('2d');
+      const SIZE = 16;                  // px per glyph cell
+      const STEP_MS = 50;               // ~20 fps is plenty for a background
+      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let drops = [];                   // per column: current row of the falling head
+
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(innerWidth * dpr);
+        canvas.height = Math.floor(innerHeight * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.font = `${SIZE - 2}px ui-monospace, Consolas, monospace`;
+        const cols = Math.ceil(innerWidth / SIZE);
+        // Start every column at a random height so the rain doesn't begin as one flat line.
+        drops = Array.from({ length: cols }, (_, i) => drops[i] ?? Math.floor(Math.random() * -innerHeight / SIZE));
+        ctx.fillStyle = '#020803';
+        ctx.fillRect(0, 0, innerWidth, innerHeight);
+      }
+
+      function step() {
+        // Paint over the last frame with a translucent black, which is what makes the trails fade.
+        ctx.fillStyle = 'rgba(2, 8, 3, 0.12)';
+        ctx.fillRect(0, 0, innerWidth, innerHeight);
+        for (let i = 0; i < drops.length; i++) {
+          const y = drops[i] * SIZE;
+          if (y >= 0) {
+            // The head of each column is near-white, the rest phosphor green.
+            ctx.fillStyle = Math.random() < 0.08 ? '#d6ffe2' : '#00ff66';
+            ctx.fillText(Math.random() < 0.5 ? '0' : '1', i * SIZE, y);
+          }
+          // Once a column is off the bottom, restart it at the top after a random pause.
+          drops[i] = y > innerHeight && Math.random() > 0.975 ? 0 : drops[i] + 1;
+        }
+      }
+
+      resize();
+      addEventListener('resize', resize);
+      if (still) {
+        // A static scatter of digits keeps the look without any movement.
+        for (let n = 0; n < 60; n++) step();
+        return;
+      }
+      let last = 0;
+      const loop = (t) => {
+        if (!document.hidden && t - last >= STEP_MS) { last = t; step(); }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    })();
   </script>
 </body>
 </html>
