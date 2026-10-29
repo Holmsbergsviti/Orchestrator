@@ -24,10 +24,6 @@ public sealed class ConsoleOptions
     public string Remote { get; set; } = "origin";
     public string MainBranch { get; set; } = "main";
     public string FleetStateBranch { get; set; } = "fleet-state";
-    /// <summary>Clone URL of a SEPARATE repo the agents write heartbeats/screenshots to (their
-    /// -StateRepo). Blank = they write to this control repo's fleet-state branch. The console
-    /// adds it to the clone as the "state" remote and reads the fleet from there.</summary>
-    public string StateRepoUrl { get; set; } = "";
     public bool OpenBrowser { get; set; } = true;
     /// <summary>Shared secret required to sign in. REQUIRED if Urls binds to anything but
     /// localhost — the console refuses to start non-locally without one.</summary>
@@ -83,9 +79,6 @@ public sealed class MachineView
     /// (agent too old to sign), "changed" (key differs from the pinned one), or "error" (the
     /// console couldn't read its pin file). Anything but "trusted" means Remote is refused.</summary>
     public string RelayKey { get; set; } = "missing";
-    /// <summary>True when the token this machine reads the control repo with could also push to
-    /// it, so a copy of it could reach every machine. See docs/SETUP.md, "Lock down main".</summary>
-    public bool ControlTokenCanWrite { get; set; }
 }
 
 public sealed class StateResponse
@@ -221,7 +214,6 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("lastError")] public string? LastError { get; set; }
     [JsonPropertyName("macAddresses")] public List<string> MacAddresses { get; set; } = new();
     [JsonPropertyName("relayPublicKey")] public string? RelayPublicKey { get; set; }   // null = older agent
-    [JsonPropertyName("controlTokenCanWrite")] public bool? ControlTokenCanWrite { get; set; }   // true = that token can push main; null = unknown/older agent
 }
 
 // ---- service -------------------------------------------------------------------------
@@ -263,10 +255,6 @@ public sealed class ControlRepo
         _git = new GitRepo(opt.ControlRepoPath);
         _relay = relay;
         _keys = keys;
-        // Point the clone's "state" remote at the separate state repo, if there is one. Done on
-        // every start so changing StateRepoUrl in settings is all it takes to move it.
-        if (!string.IsNullOrWhiteSpace(opt.StateRepoUrl) && _git.IsValid())
-            _git.EnsureRemote(StateRemote, opt.StateRepoUrl.Trim());
         _log = log;
     }
 
@@ -274,24 +262,13 @@ public sealed class ControlRepo
     public string RepoPath => _opt.ControlRepoPath;
 
     private string MainRef => $"{_opt.Remote}/{_opt.MainBranch}";
-    /// <summary>The remote heartbeats are read from: the separate state repo when one is
-    /// configured, otherwise the control repo itself.</summary>
-    private const string StateRemote = "state";
-    private string FleetRemote => string.IsNullOrWhiteSpace(_opt.StateRepoUrl) ? _opt.Remote : StateRemote;
-    private string FleetRef => $"{FleetRemote}/{_opt.FleetStateBranch}";
-
-    /// <summary>Fetch the control repo, and the state repo too when it's a separate one.</summary>
-    private async Task FetchAllAsync(CancellationToken ct)
-    {
-        await _git.FetchAsync(_opt.Remote, ct);
-        if (FleetRemote != _opt.Remote) await _git.FetchAsync(FleetRemote, ct);
-    }
+    private string FleetRef => $"{_opt.Remote}/{_opt.FleetStateBranch}";
 
     /// <summary>Fetch, then build the combined fleet + programs view for the UI.</summary>
     public async Task<StateResponse> LoadStateAsync(CancellationToken ct)
     {
         var resp = new StateResponse();
-        await FetchAllAsync(ct);
+        await _git.FetchAsync(_opt.Remote, ct);
 
         // --- programs (from manifest.json on the main branch) ---
         var manifestText = _git.ReadFileFromRef(MainRef, ManifestPath);
@@ -321,14 +298,6 @@ public sealed class ControlRepo
             .OrderByDescending(m => m.Online)
             .ThenBy(m => m.Label ?? m.Hostname, StringComparer.OrdinalIgnoreCase)
             .ToList();
-
-        // The fleet's biggest single risk, said where it can't be missed: one copied token from
-        // any of these machines can push to main, i.e. run code as SYSTEM everywhere.
-        var writable = resp.Machines.Where(m => m.ControlTokenCanWrite).Select(m => m.Label ?? m.Hostname).ToList();
-        if (writable.Count > 0)
-            resp.Warnings.Add($"{writable.Count} machine(s) hold a token that can push to the control repo: " +
-                $"{string.Join(", ", writable)}. Anyone who copies it from one of them can run code on every machine. " +
-                "Give them a read-only token and a separate state repo — see docs/SETUP.md, \"Lock down main\".");
 
         resp.Programs = programNodes.Select(ToProgramView).ToList();
         return resp;
@@ -676,7 +645,7 @@ public sealed class ControlRepo
     /// <summary>Fetch, then return a machine's latest captured screenshot as JPEG bytes, or null if none.</summary>
     public async Task<byte[]?> GetLatestScreenshotAsync(string machineId, CancellationToken ct)
     {
-        await FetchAllAsync(ct);
+        await _git.FetchAsync(_opt.Remote, ct);
         var meta = ReadLatestScreenshotMeta(machineId);
         if (meta is null || string.IsNullOrWhiteSpace(meta.Path)) return null;
         return _git.ReadFileBytesFromRef(FleetRef, meta.Path);
@@ -773,7 +742,7 @@ public sealed class ControlRepo
     public async Task<RemoteSessionResult> TrustRelayKeyAsync(string machineId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(machineId)) return new RemoteSessionResult { Ok = false, Message = "Machine id is required." };
-        await FetchAllAsync(ct);
+        await _git.FetchAsync(_opt.Remote, ct);
         var hb = ReadHeartbeats().FirstOrDefault(h => string.Equals(h.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
         if (hb is null || string.IsNullOrWhiteSpace(hb.RelayPublicKey))
             return new RemoteSessionResult { Ok = false, Message = "That machine isn't reporting a key to trust." };
@@ -787,7 +756,7 @@ public sealed class ControlRepo
     /// <summary>Fetch, verify the clone is clean, and fast-forward main. Returns an error message or null.</summary>
     private async Task<string?> PrepareCleanMainAsync(CancellationToken ct)
     {
-        await FetchAllAsync(ct);
+        await _git.FetchAsync(_opt.Remote, ct);
         if (!_git.IsClean())
             return "The control-repo clone has uncommitted changes. Commit or discard them, then retry.";
         try { await _git.SyncBranchToRemoteAsync(_opt.Remote, _opt.MainBranch, ct); }
@@ -994,8 +963,7 @@ public sealed class ControlRepo
             AppliedProgramIds = hb.AppliedProgramIds,
             Mac = hb.MacAddresses.FirstOrDefault(),
             LastScreenshotUtc = shot?.CapturedUtc,
-            RelayKey = relayKey,
-            ControlTokenCanWrite = hb.ControlTokenCanWrite == true
+            RelayKey = relayKey
         };
     }
 

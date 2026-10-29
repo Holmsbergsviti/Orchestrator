@@ -44,51 +44,8 @@ GitHub → Settings → Developer settings → Personal access tokens.
   `ReportState: false`).
 - Classic: `repo` scope.
 
-> **Don't leave the agents on a read-write token for long.** Every machine stores its token in
-> plain text, and a token that can write heartbeats can also push to `main` — so one copied
-> token means code running as SYSTEM on every machine. Fine for a first test; before you rely on
-> the fleet, do [3a](#3a-lock-down-main-recommended). The console shows a warning while any
-> machine still holds a token that can push to the control repo.
-
-## 3a. Lock down main (recommended)
-The only thing an agent ever **writes** is its own status: heartbeats and screenshots. Send
-those to a second repo, and the token that reads the control repo can be **read-only**. A
-token stolen from a machine then can't change `manifest.json`, `commands.json` or
-`agent.json`, so it can't run anything anywhere. (A GitHub branch rule would also do it, but
-on a private repo that needs a paid plan. This way is free.)
-
-1. **Create the state repo.** GitHub → New repository, e.g. `<you>/control-state`, **Private**,
-   and tick **Add a README** (agents branch off its first commit).
-2. **Token A (read-only, control repo).** Settings → Developer settings → Fine-grained tokens →
-   Generate:
-   - Repository access: **Only select repositories** → the **control repo**.
-   - Permissions → Repository → **Contents: Read-only**.
-3. **Token B (write, state repo only).** Same again, but:
-   - Repository access: only the **state repo**.
-   - Permissions → **Contents: Read and write**.
-4. **Reinstall each machine** with both. Everything else is kept:
-   ```powershell
-   .\scripts\install.ps1 -Token <token A> -StateRepo <you>/control-state -StateToken <token B>
-   ```
-5. **Point the console at the state repo**, in `appsettings.Local.json` next to its
-   `appsettings.json`:
-   ```json
-   { "Console": { "StateRepoUrl": "https://github.com/<you>/control-state.git" } }
-   ```
-   It adds that repo to your clone as the `state` remote and reads the fleet from there. Your
-   own git credentials need access to it, same as the control repo.
-6. **Fleet watchdog** (if you use it): copy `.github/workflows/fleet-watch.yml` from the control
-   repo to the state repo's default branch; it reads the `fleet-state` branch of the repo it
-   lives in. Remove it from the control repo.
-7. Once the console's "can push to the control repo" warning is gone, **revoke** the old
-   token(s) the machines used.
-
-Each machine checks its control-repo token at startup (a harmless probe that creates nothing)
-and reports whether it could push. That's what drives the console warning, so it clears by
-itself once a machine is on token A.
-
-The old `fleet-state` branch in the control repo isn't read any more after the switch; delete it
-whenever you like.
+On its first heartbeat each agent auto-creates the **`fleet-state`** branch and writes
+`state/<machineId>.json` to it. You don't need to create that branch yourself.
 
 ## 4. Install on each target (Administrator PowerShell)
 ```powershell

@@ -35,34 +35,8 @@ public sealed class OrchestratorConfig
     /// <summary>Repo-relative path to the manifest.</summary>
     public string ManifestPath { get; set; } = OrchestratorDefaults.Instance.ManifestFileName;  // where the manifest lives in the repo (from defaults.json)
 
-    /// <summary>Token for reading the control repo. Empty for public repos. When a separate
-    /// state repo is configured (below), this should be a READ-ONLY token.</summary>
+    /// <summary>Personal Access Token with repo:read scope. Empty for public repos.</summary>
     public string GitHubToken { get; set; } = string.Empty;      // auth token; blank for public repos
-
-    // ---- Optional separate state repo --------------------------------------------------
-    // Heartbeats and screenshots are the only things an agent ever WRITES. Left blank, they go
-    // to the control repo's fleet-state branch, which means every machine's token can also push
-    // to main — and one copied token can run code as SYSTEM on the whole fleet. Pointing them at
-    // a second repo, with its own token, lets the control-repo token be read-only.
-    // GitHub can't enforce "this token may write fleet-state but not main" on a free private
-    // repo (rulesets need a paid plan), so a separate repo is the free way to get that split.
-
-    /// <summary>Owner of the repo heartbeats/screenshots are written to. Blank = the control repo.</summary>
-    public string StateRepoOwner { get; set; } = string.Empty;
-
-    /// <summary>Name of the repo heartbeats/screenshots are written to. Blank = the control repo.</summary>
-    public string StateRepoName { get; set; } = string.Empty;
-
-    /// <summary>Token with write access to the state repo only. Blank = reuse GitHubToken.</summary>
-    public string StateToken { get; set; } = string.Empty;
-
-    /// <summary>True when heartbeats go to their own repo rather than the control repo.</summary>
-    [JsonIgnore] public bool UsesSeparateStateRepo =>
-        !string.IsNullOrWhiteSpace(StateRepoOwner) && !string.IsNullOrWhiteSpace(StateRepoName);
-
-    [JsonIgnore] public string EffectiveStateOwner => UsesSeparateStateRepo ? StateRepoOwner : RepoOwner;
-    [JsonIgnore] public string EffectiveStateRepo => UsesSeparateStateRepo ? StateRepoName : RepoName;
-    [JsonIgnore] public string EffectiveStateToken => string.IsNullOrWhiteSpace(StateToken) ? GitHubToken : StateToken;
 
     /// <summary>Minutes between sync cycles.</summary>
     public int SyncIntervalMinutes { get; set; } = OrchestratorDefaults.Instance.DefaultSyncIntervalMinutes;  // how often to re-check GitHub (from defaults.json)

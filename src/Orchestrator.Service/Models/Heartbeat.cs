@@ -67,13 +67,6 @@ public sealed class Heartbeat
     [JsonPropertyName("relayPublicKey")]
     public string? RelayPublicKey { get; set; }
 
-    /// <summary>Whether the token this machine reads the control repo with could also PUSH to
-    /// it (null = couldn't tell). True means a copy taken from this one machine could run code
-    /// as SYSTEM on the whole fleet; the console warns about it. The fix is a separate state
-    /// repo plus a read-only control-repo token (docs/SETUP.md, "Lock down main").</summary>
-    [JsonPropertyName("controlTokenCanWrite")]
-    public bool? ControlTokenCanWrite { get; set; }
-
     /// <summary>
     /// A stable fingerprint of everything that MATTERS (i.e. not the timestamp). If this
     /// is unchanged from the last pushed heartbeat, the machine's situation hasn't really
@@ -93,6 +86,5 @@ public sealed class Heartbeat
             string.Join(',', AppliedProgramIds),
             string.Join(',', MacAddresses),
             RelayPublicKey ?? "",   // a new key must reach the console promptly, not hours later
-            ControlTokenCanWrite?.ToString() ?? "",   // so switching to a read-only token clears the console's warning promptly
             LastError ?? "");
 }

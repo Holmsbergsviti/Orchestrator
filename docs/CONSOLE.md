@@ -54,7 +54,6 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:Remote` | Git remote to fetch/push | `origin` |
 | `Console:MainBranch` | Branch with `manifest.json` + `fleet.json` | `main` |
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
-| `Console:StateRepoUrl` | Clone URL of a separate state repo the agents write to ([SETUP.md §3a](SETUP.md#3a-lock-down-main-recommended)); added to your clone as the `state` remote | *(blank: the control repo)* |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
 | `Urls` | Address the UI listens on | `http://localhost:5080` |
 

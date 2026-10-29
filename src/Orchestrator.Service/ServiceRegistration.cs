@@ -25,12 +25,18 @@ public static class ServiceRegistration
         builder.Services.Configure<OrchestratorConfig>(
             builder.Configuration.GetSection(OrchestratorConfig.SectionName));   // appsettings "Orchestrator" section
 
-        // Named HttpClients for the GitHub API (auth + UA set once). Two of them, because reads
-        // (control repo) and writes (state repo) can use different tokens — see StateRepoOwner.
+        // Named HttpClient for the GitHub API (auth + UA set once).
         builder.Services.AddHttpClient(GitHubClient.HttpClientName, (sp, client) =>
-            ConfigureGitHubClient(client, sp.GetRequiredService<IOptions<OrchestratorConfig>>().Value.GitHubToken));
-        builder.Services.AddHttpClient(GitHubClient.StateHttpClientName, (sp, client) =>
-            ConfigureGitHubClient(client, sp.GetRequiredService<IOptions<OrchestratorConfig>>().Value.EffectiveStateToken));
+        {
+            var conf = sp.GetRequiredService<IOptions<OrchestratorConfig>>().Value;
+            client.BaseAddress = new Uri("https://api.github.com/");
+            client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("GitHubOrchestrator", "1.0"));
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+            if (!string.IsNullOrWhiteSpace(conf.GitHubToken))
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", conf.GitHubToken);
+            client.Timeout = TimeSpan.FromMinutes(5);
+        });
 
         builder.Services.AddSingleton<IConfigService, ConfigService>();
         builder.Services.AddSingleton<IChecksumService, ChecksumService>();
@@ -48,17 +54,6 @@ public static class ServiceRegistration
         builder.Services.AddSingleton<IRemoteSessionService, RemoteSessionService>();
         builder.Services.AddSingleton<IRelayIdentity, RelayIdentity>();
         builder.Services.AddSingleton<ISelfUpdateService, SelfUpdateService>();
-    }
-
-    private static void ConfigureGitHubClient(HttpClient client, string token)
-    {
-        client.BaseAddress = new Uri("https://api.github.com/");
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("GitHubOrchestrator", "1.0"));
-        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
-        if (!string.IsNullOrWhiteSpace(token))
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        client.Timeout = TimeSpan.FromMinutes(5);
     }
 
     /// <summary>Serilog: daily-rolling file under &lt;RootPath&gt;\logs plus console.</summary>

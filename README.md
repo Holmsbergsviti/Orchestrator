@@ -159,8 +159,6 @@ The per-machine `appsettings.json` written at install time still wins at runtime
 | `RegistryEntryPrefix` | Namespaces Run entries | `Orch_` |
 | `ReportState` | Commit a heartbeat to `fleet-state` (needs a writable token) | `true` |
 | `FleetStateBranch` | Branch heartbeats are committed to | `fleet-state` |
-| `StateRepoOwner` / `StateRepoName` | Separate repo heartbeats and screenshots go to, so `GitHubToken` can be read-only (installer: `-StateRepo owner/name`) | *(blank: the control repo)* |
-| `StateToken` | Write token for that state repo only (installer: `-StateToken`) | *(blank: reuse `GitHubToken`)* |
 | `HeartbeatMaxIntervalMinutes` | Force a heartbeat at least this often (also how long an idle machine still counts as online) | `30` |
 
 ## Uninstall

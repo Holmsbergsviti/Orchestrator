@@ -22,18 +22,6 @@ public sealed class GitRepo(string repoPath)
     public bool IsValid()
         => Directory.Exists(RepoPath) && TryRun(out _, out _, "rev-parse", "--is-inside-work-tree");
 
-    /// <summary>Make sure remote <paramref name="name"/> exists and points at <paramref name="url"/>.</summary>
-    public void EnsureRemote(string name, string url)
-    {
-        if (TryRun(out var current, out _, "remote", "get-url", name))
-        {
-            if (current.Trim() != url && !TryRun(out _, out var err, "remote", "set-url", name, url))
-                throw new GitException($"git remote set-url {name} failed: {err.Trim()}");
-        }
-        else if (!TryRun(out _, out var err, "remote", "add", name, url))
-            throw new GitException($"git remote add {name} failed: {err.Trim()}");
-    }
-
     /// <summary>Download the latest refs from the remote (no working-tree changes).</summary>
     public Task FetchAsync(string remote, CancellationToken ct)
         => RunAsync(ct, "fetch", remote, "--prune", "--quiet");
