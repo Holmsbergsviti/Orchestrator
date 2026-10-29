@@ -376,6 +376,13 @@
           el('button', { type: 'button', textContent: 'Remote', style: 'margin-left:6px',
             title: 'Start a live remote-control session (needs a logged-on user)', onclick: () => startRemoteSession(m) })
         ]);
+        // A changed remote-control key is refused until the operator vouches for it: after a
+        // reinstall that's expected, but it's also exactly what an impersonating machine looks like.
+        if (m.relayKey === 'changed') {
+          power.append(el('button', { type: 'button', textContent: 'Trust new key', className: 'danger', style: 'margin-left:6px',
+            title: 'This machine reports a different remote-control key than before. Only trust it if you reinstalled this machine.',
+            onclick: () => trustRelayKey(m) }));
+        }
         if (m.mac) {
           power.append(el('button', { type: 'button', textContent: 'Wake', style: 'margin-left:6px',
             title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => sendWake([m.machineId]) }));
@@ -681,6 +688,20 @@
           toast('Remote session failed: ' + (res.message || res.detail || 'unknown error'), true);
         }
       } catch (e) { toast('Remote session failed: ' + e.message, true); }
+    }
+
+    async function trustRelayKey(m) {
+      const name = m.label || m.hostname;
+      if (!confirm(`${name} reports a NEW remote-control key.\n\nThat's normal if you reinstalled it. If you didn't, another machine may be ` +
+                   `trying to pose as it — don't trust the key; check that machine first.\n\nTrust the new key?`)) return;
+      try {
+        const r = await fetch('/api/trust-relay-key', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
+        });
+        const res = await r.json().catch(() => ({ message: r.statusText }));
+        if (r.ok && res.ok) { toast(res.message || 'Key trusted'); load(); }
+        else toast('Trust failed: ' + (res.message || res.detail || 'unknown error'), true);
+      } catch (e) { toast('Trust failed: ' + e.message, true); }
     }
 
     // Wake-on-LAN one or more machines (by id; the waker sends the packets).

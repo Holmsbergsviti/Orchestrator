@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Orchestrator.Service\Orchestrator.Service.csproj" />   <!-- reference the code under test -->
+    <ProjectReference Include="..\..\src\Orchestrator.Console\Orchestrator.Console.csproj" />   <!-- the console side of the relay signature, so both halves are tested against each other -->
   </ItemGroup>
 
 </Project>

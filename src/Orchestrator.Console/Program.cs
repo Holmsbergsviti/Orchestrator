@@ -40,6 +40,7 @@ builder.Configuration.GetSection(ConsoleOptions.SectionName).Bind(opt);
 if (repoArg is not null) opt.ControlRepoPath = repoArg;   // bare arg wins
 builder.Services.AddSingleton(opt);
 builder.Services.AddSingleton<RelayHub>();
+builder.Services.AddSingleton<RelayKeyStore>();
 builder.Services.AddSingleton<ControlRepo>();
 builder.Services.AddSingleton<LoginLockout>();
 
@@ -294,6 +295,17 @@ app.MapPost("/api/remote-session", async (ScreenshotApiRequest req, ControlRepo 
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// The operator accepts a machine's changed remote-control key (after reinstalling it).
+app.MapPost("/api/trust-relay-key", async (ScreenshotApiRequest req, ControlRepo r, CancellationToken ct) =>
+{
+    try
+    {
+        var result = await r.TrustRelayKeyAsync(req.MachineId, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
 // The operator's browser side of a remote-control session. Cookie-authenticated like every
 // other route; RelayHub additionally checks the sessionId itself is one this console issued.
 app.Map("/relay/view", async (HttpContext ctx, RelayHub relay) =>
@@ -311,7 +323,8 @@ app.Map("/relay/view", async (HttpContext ctx, RelayHub relay) =>
 
 // The agent's side of a remote-control session. NOT cookie-gated (see the auth middleware
 // above) — authenticates instead with the single-use session token issued when the console
-// queued the request, presented as "Authorization: Bearer <token>".
+// queued the request, presented as "Authorization: Bearer <token>", PLUS the machine's signature
+// over it (RelaySignature) — the token alone is readable by every machine in the fleet.
 app.Map("/relay/agent", async (HttpContext ctx, RelayHub relay) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
@@ -320,8 +333,13 @@ app.Map("/relay/agent", async (HttpContext ctx, RelayHub relay) =>
     var sessionId = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
         ? authHeader["Bearer ".Length..].Trim()
         : "";
-    if (string.IsNullOrEmpty(sessionId) || !relay.IsValid(sessionId, machineId))
+    var proof = ctx.Request.Headers[RelaySignature.HeaderName].ToString();
+    if (string.IsNullOrEmpty(sessionId) || !relay.IsValidAgent(sessionId, machineId, proof))
     {
+        // Logged because a bad signature on a real session id is exactly what one machine
+        // trying to take over another's session looks like.
+        app.Logger.LogWarning("relay: refused agent connection for machine {MachineId} from {Ip} (unknown session or bad signature)",
+            machineId, ctx.Connection.RemoteIpAddress);
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         return;
     }

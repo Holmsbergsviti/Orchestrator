@@ -31,8 +31,10 @@ namespace Orchestrator.Service.Services;
 
 public interface IRemoteSessionService
 {
-    /// <summary>Run one remote-control session end-to-end until it ends. Returns a process exit code.</summary>
-    Task<int> RunAsync(string sessionId, CancellationToken ct = default);
+    /// <summary>Run one remote-control session end-to-end until it ends. Returns a process exit code.
+    /// <paramref name="proof"/> is the service's signature over this machine + session (see
+    /// RelayIdentity); the relay refuses the connection without it.</summary>
+    Task<int> RunAsync(string sessionId, string? proof, CancellationToken ct = default);
 }
 
 [SupportedOSPlatform("windows")]
@@ -78,8 +80,9 @@ public sealed class RemoteSessionService : IRemoteSessionService
         _log = log;
     }
 
-    public async Task<int> RunAsync(string sessionId, CancellationToken ct = default)
+    public async Task<int> RunAsync(string sessionId, string? proof, CancellationToken ct = default)
     {
+        _proof = proof;
         if (!OperatingSystem.IsWindows())
         {
             _log.LogWarning("remote-session: not supported on this platform");
@@ -146,6 +149,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
     private void SetEndReason(string reason) => Interlocked.CompareExchange(ref _endReason, reason, null);
 
     private string? _endReason;
+    private string? _proof;   // the service's signature for this session, presented to the relay
 
     /// <summary>Give the session another grant of time and push the hard deadline out. Returns
     /// false when the ceiling is reached — at that point the session ends on schedule no matter
@@ -321,6 +325,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
 
             var ws = new ClientWebSocket();
             ws.Options.SetRequestHeader("Authorization", $"Bearer {sessionId}");
+            if (!string.IsNullOrEmpty(_proof)) ws.Options.SetRequestHeader(RelayProof.HeaderName, _proof);
             ApplyCertificatePinning(ws);
             try
             {
@@ -372,7 +377,9 @@ public sealed class RemoteSessionService : IRemoteSessionService
                 return $"couldn't reach the console at {uri.Host}:{uri.Port}. Is it running, bound beyond localhost, and allowed through the firewall?";
         }
         if (ex.Message.Contains("401", StringComparison.Ordinal) || ex.Message.Contains("403", StringComparison.Ordinal))
-            return "the console rejected this session token. It forgets pending sessions when restarted — start the session again.";
+            return string.IsNullOrEmpty(_proof)
+                ? "this PC has no remote-control signing key, so the console refused it. Check the agent log for \"relay identity\"."
+                : "the console rejected this session. Either it was restarted (it forgets pending sessions — start the session again), or it doesn't recognise this PC's signing key (after a reinstall, press \"Trust new key\" in the console).";
         return ex.Message;
     }
 

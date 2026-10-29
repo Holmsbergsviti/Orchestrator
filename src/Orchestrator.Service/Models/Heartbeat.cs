@@ -61,6 +61,12 @@ public sealed class Heartbeat
     [JsonPropertyName("macAddresses")]
     public List<string> MacAddresses { get; set; } = new();    // this machine's NIC MACs (for Wake-on-LAN)
 
+    /// <summary>Public half of this machine's remote-control signing key (base64 SPKI), so the
+    /// console can check that whoever connects for this machine's session really is this
+    /// machine. Public on purpose — see RelayIdentity. Null when the agent has no key.</summary>
+    [JsonPropertyName("relayPublicKey")]
+    public string? RelayPublicKey { get; set; }
+
     /// <summary>
     /// A stable fingerprint of everything that MATTERS (i.e. not the timestamp). If this
     /// is unchanged from the last pushed heartbeat, the machine's situation hasn't really
@@ -79,5 +85,6 @@ public sealed class Heartbeat
             ManifestVersion ?? "",
             string.Join(',', AppliedProgramIds),
             string.Join(',', MacAddresses),
+            RelayPublicKey ?? "",   // a new key must reach the console promptly, not hours later
             LastError ?? "");
 }

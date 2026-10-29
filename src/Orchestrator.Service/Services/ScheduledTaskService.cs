@@ -34,7 +34,7 @@ public interface IScheduledTaskService   // the contract for scheduled-task hand
 
     /// <summary>Start a live remote-control session, soon, in the interactive logged-on user's
     /// session, for up to <paramref name="maxDuration"/> before it's force-ended.</summary>
-    void RunInteractiveRemoteSessionOnce(string sessionId, TimeSpan maxDuration);
+    void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration);
 
     /// <summary>Run a command ONCE as SYSTEM after <paramref name="delay"/>. Used for work that
     /// can't happen inside the service — notably replacing the service's own binary.</summary>
@@ -159,7 +159,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         }
     }
 
-    public void RunInteractiveRemoteSessionOnce(string sessionId, TimeSpan maxDuration)
+    public void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration)
     {
         var user = GetInteractiveUser();
         if (string.IsNullOrWhiteSpace(user))
@@ -172,7 +172,11 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
         var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
         var taskName = _config.RegistryEntryPrefix + "session_" + sessionId;
-        var xml = BuildInteractiveSessionXml(exe, $"remote-session {sessionId}", user, start, maxDuration);
+        // The proof (hex) is passed straight through to the session process, which presents
+        // it to the relay. It's bound to this machine and this session, so it's no use to
+        // anyone who reads it off the task definition.
+        var args = string.IsNullOrEmpty(proof) ? $"remote-session {sessionId}" : $"remote-session {sessionId} {proof}";
+        var xml = BuildInteractiveSessionXml(exe, args, user, start, maxDuration);
 
         var tmp = Path.Combine(Path.GetTempPath(), $"orch-session-{Guid.NewGuid():N}.xml");
         File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));

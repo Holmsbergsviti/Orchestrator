@@ -97,7 +97,18 @@ a session long after you asked for one. Just press **Remote** again.
   new thumbprint). Re-copy it.
 - *"couldn't reach the console"* → the console isn't running, is still bound to `localhost`,
   or the port is blocked. `Urls` must be `https://0.0.0.0:<port>`, not `localhost`.
-- *"rejected this session token"* → the console restarted after you pressed Remote. Press it again.
+- *"rejected this session"* → either the console restarted after you pressed Remote (press it
+  again), or it doesn't recognise this machine's signing key — see the next item.
+
+**Remote says the machine's key "has changed" / shows "Trust new key"** — the machine reports a
+different remote-control key than the one the console pinned. After a reinstall, or if
+`C:\Windows\Orch\cache` was cleared, that's expected: press **Trust new key**. If neither
+happened, treat it as a machine trying to impersonate another and check the console log for
+`relay: refused agent connection`.
+
+**Remote says the machine "hasn't reported a remote-control key yet"** — its agent is older than
+the console. It updates itself on a coming sync; if it doesn't, check its log for `self-update:`
+and `relay identity:`.
 
 **"This console doesn't recognise the session"** — same cause: pending sessions are held in
 memory only, so a console restart cancels them.

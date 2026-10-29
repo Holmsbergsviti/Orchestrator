@@ -75,6 +75,10 @@ public sealed class MachineView
     public List<string> AppliedProgramIds { get; set; } = new();
     public string? Mac { get; set; }   // primary NIC MAC, for Wake-on-LAN
     public string? LastScreenshotUtc { get; set; }   // when the newest captured screenshot was taken, if any
+    /// <summary>Whether this machine can be trusted for remote control: "trusted", "missing"
+    /// (agent too old to sign), "changed" (key differs from the pinned one), or "error" (the
+    /// console couldn't read its pin file). Anything but "trusted" means Remote is refused.</summary>
+    public string RelayKey { get; set; } = "missing";
 }
 
 public sealed class StateResponse
@@ -209,6 +213,7 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("appliedProgramIds")] public List<string> AppliedProgramIds { get; set; } = new();
     [JsonPropertyName("lastError")] public string? LastError { get; set; }
     [JsonPropertyName("macAddresses")] public List<string> MacAddresses { get; set; } = new();
+    [JsonPropertyName("relayPublicKey")] public string? RelayPublicKey { get; set; }   // null = older agent
 }
 
 // ---- service -------------------------------------------------------------------------
@@ -241,13 +246,15 @@ public sealed class ControlRepo
     private readonly ConsoleOptions _opt;
     private readonly GitRepo _git;
     private readonly RelayHub _relay;
+    private readonly RelayKeyStore _keys;
     private readonly ILogger<ControlRepo> _log;
 
-    public ControlRepo(ConsoleOptions opt, RelayHub relay, ILogger<ControlRepo> log)
+    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ILogger<ControlRepo> log)
     {
         _opt = opt;
         _git = new GitRepo(opt.ControlRepoPath);
         _relay = relay;
+        _keys = keys;
         _log = log;
     }
 
@@ -287,7 +294,7 @@ public sealed class ControlRepo
             resp.Warnings.Add($"No machines have reported yet (branch '{_opt.FleetStateBranch}' is empty or missing).");
 
         resp.Machines = heartbeats
-            .Select(hb => ToMachineView(hb, labels, ReadLatestScreenshotMeta(hb.MachineId)))
+            .Select(hb => ToMachineView(hb, labels, ReadLatestScreenshotMeta(hb.MachineId), CheckRelayKey(hb, resp.Warnings)))
             .OrderByDescending(m => m.Online)
             .ThenBy(m => m.Label ?? m.Hostname, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -668,6 +675,15 @@ public sealed class ControlRepo
         var err = await PrepareCleanMainAsync(ct);
         if (err is not null) return new RemoteSessionResult { Ok = false, Message = err };
 
+        // Only a machine whose signing key we trust can take a session: the session id below is
+        // readable by every machine, so the key is what stops one of them answering for another.
+        var hb = ReadHeartbeats().FirstOrDefault(h => string.Equals(h.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
+        if (hb is null) return new RemoteSessionResult { Ok = false, Message = "That machine hasn't reported a heartbeat yet." };
+        var keyStatus = CheckRelayKey(hb, warnings: null);
+        if (keyStatus != "trusted")
+            return new RemoteSessionResult { Ok = false, Message = RelayKeyRefusal(keyStatus) };
+        var agentKey = hb.RelayPublicKey!;
+
         var sessionId = Guid.NewGuid().ToString("N");
         var requestedUtc = DateTimeOffset.UtcNow;
         // How long the agent may take to NOTICE the request (it only looks once per sync). Past
@@ -699,7 +715,7 @@ public sealed class ControlRepo
             // would leave it counting down long after the agent discarded the request as stale.
             // The grace covers the agent connecting AFTER it picks the request up (its one-time
             // task fires ~15s later, then has to reach the relay).
-            _relay.RegisterPending(sessionId, machineId, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace);
+            _relay.RegisterPending(sessionId, machineId, agentKey, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace);
             return new RemoteSessionResult
             {
                 Ok = true,
@@ -709,6 +725,30 @@ public sealed class ControlRepo
             };
         }
         catch (GitException ex) { return new RemoteSessionResult { Ok = false, Message = $"Commit/push failed: {ex.Message}" }; }
+    }
+
+    /// <summary>Why a machine can't take a remote session, in words that name the fix.</summary>
+    private string RelayKeyRefusal(string status) => status switch
+    {
+        "changed" => "This machine's remote-control key has changed since the console first saw it. That's expected after a " +
+                     "reinstall, but it's also what an impersonating machine looks like. If you reinstalled it, press \"Trust new key\".",
+        "error" => $"The console couldn't read its remote-control key pins ({_keys.FilePath}). Fix or delete that file.",
+        _ => "This machine hasn't reported a remote-control key yet. Its agent is older than this console; it picks up " +
+             "the new build on a coming sync, then Remote works."
+    };
+
+    /// <summary>Accept a machine's current (changed) key as genuine — the operator's call, after a
+    /// reinstall. Reads the key fresh from the heartbeat so it's the one the machine reports now.</summary>
+    public async Task<RemoteSessionResult> TrustRelayKeyAsync(string machineId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(machineId)) return new RemoteSessionResult { Ok = false, Message = "Machine id is required." };
+        await _git.FetchAsync(_opt.Remote, ct);
+        var hb = ReadHeartbeats().FirstOrDefault(h => string.Equals(h.MachineId, machineId, StringComparison.OrdinalIgnoreCase));
+        if (hb is null || string.IsNullOrWhiteSpace(hb.RelayPublicKey))
+            return new RemoteSessionResult { Ok = false, Message = "That machine isn't reporting a key to trust." };
+        try { _keys.Trust(hb.MachineId, hb.RelayPublicKey); }
+        catch (InvalidOperationException ex) { return new RemoteSessionResult { Ok = false, Message = ex.Message }; }
+        return new RemoteSessionResult { Ok = true, Message = "New key trusted. Remote control works for this machine again." };
     }
 
     // ---- edit helpers ------------------------------------------------------------------
@@ -884,7 +924,27 @@ public sealed class ControlRepo
         _ => null
     };
 
-    private static MachineView ToMachineView(HeartbeatFile hb, Dictionary<string, string> labels, ScreenshotMeta? shot)
+    /// <summary>Pin-or-compare this machine's remote-control key (see RelayKeyStore). A pin file
+    /// the console can't read is reported once as a page warning rather than breaking the page.</summary>
+    private string CheckRelayKey(HeartbeatFile hb, List<string>? warnings)
+    {
+        try
+        {
+            return _keys.Check(hb.MachineId, hb.RelayPublicKey) switch
+            {
+                RelayKeyStatus.Trusted => "trusted",
+                RelayKeyStatus.Changed => "changed",
+                _ => "missing"
+            };
+        }
+        catch (InvalidOperationException ex)
+        {
+            if (warnings is not null && !warnings.Contains(ex.Message)) warnings.Add(ex.Message);
+            return "error";
+        }
+    }
+
+    private static MachineView ToMachineView(HeartbeatFile hb, Dictionary<string, string> labels, ScreenshotMeta? shot, string relayKey)
     {
         labels.TryGetValue(hb.MachineId, out var label);
         return new MachineView
@@ -902,7 +962,8 @@ public sealed class ControlRepo
             LastError = hb.LastError,
             AppliedProgramIds = hb.AppliedProgramIds,
             Mac = hb.MacAddresses.FirstOrDefault(),
-            LastScreenshotUtc = shot?.CapturedUtc
+            LastScreenshotUtc = shot?.CapturedUtc,
+            RelayKey = relayKey
         };
     }
 
