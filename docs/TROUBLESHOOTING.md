@@ -102,7 +102,9 @@ a session long after you asked for one. Just press **Remote** again.
   `-IntervalMinutes`; a few minutes is a good value for machines you want to reach.
 
 **No banner ever appears on the target** — the session process quit immediately.
-- Almost always `Orchestrator:RelayUrl` is empty there. Check it:
+- On an up-to-date agent with signing on, the console's address comes from the signed relay hint;
+  check the agent log for "no relay hint for this session" (the console wasn't started with a
+  non-localhost `Urls`, or has no signing key). Otherwise, almost always `Orchestrator:RelayUrl` is empty there. Check it:
   ```powershell
   Get-Content C:\Windows\Orch\appsettings.json | Select-String Relay
   ```

@@ -34,7 +34,9 @@ public interface IScheduledTaskService   // the contract for scheduled-task hand
 
     /// <summary>Start a live remote-control session, soon, in the interactive logged-on user's
     /// session, for up to <paramref name="maxDuration"/> before it's force-ended.</summary>
-    void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration);
+    /// <param name="relayUrl">Where to dial, when the signed relay hint named it; null = use the configured address.</param>
+    /// <param name="relayThumbprint">The certificate to pin for that address (empty = normal validation).</param>
+    void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration, string? relayUrl = null, string? relayThumbprint = null);
 
     /// <summary>Run a command ONCE as SYSTEM after <paramref name="delay"/>. Used for work that
     /// can't happen inside the service — notably replacing the service's own binary.</summary>
@@ -159,7 +161,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         }
     }
 
-    public void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration)
+    public void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration, string? relayUrl = null, string? relayThumbprint = null)
     {
         var user = GetInteractiveUser();
         if (string.IsNullOrWhiteSpace(user))
@@ -176,6 +178,16 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         // it to the relay. It's bound to this machine and this session, so it's no use to
         // anyone who reads it off the task definition.
         var args = string.IsNullOrEmpty(proof) ? $"remote-session {sessionId}" : $"remote-session {sessionId} {proof}";
+        if (!string.IsNullOrEmpty(relayUrl))
+        {
+            // Values from the signed relay hint, already matched against strict patterns by the
+            // caller; re-checked here because this string becomes a command line. "-" holds the
+            // proof's place when there is none. Deliberately never logged: the address is only
+            // meant to exist for the length of the session.
+            if (!RelayHint.IsWellFormedUrl(relayUrl) || !RelayHint.IsWellFormedThumbprint(relayThumbprint))
+                throw new ArgumentException("relay address is malformed");
+            args = $"remote-session {sessionId} {(string.IsNullOrEmpty(proof) ? "-" : proof)} {relayUrl} {(string.IsNullOrEmpty(relayThumbprint) ? "-" : relayThumbprint)}";
+        }
         var xml = BuildInteractiveSessionXml(exe, args, user, start, maxDuration);
 
         var tmp = Path.Combine(Path.GetTempPath(), $"orch-session-{Guid.NewGuid():N}.xml");

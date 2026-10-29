@@ -110,6 +110,48 @@ public sealed class GitRepo(string repoPath)
             ? o.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : Array.Empty<string>();
 
+    /// <summary>Does <paramref name="branch"/> exist on the remote? Asks the remote itself, so a stale
+    /// local copy of the ref can't answer for it. Throws if the remote can't be reached.</summary>
+    public async Task<bool> RemoteBranchExistsAsync(string remote, string branch, CancellationToken ct)
+    {
+        var (code, _, err) = await RunCore(new[] { "ls-remote", "--exit-code", "--heads", remote, branch }, ct);
+        if (code == 0) return true;
+        if (code == 2) return false;   // reached the remote; no such branch
+        throw new GitException($"git ls-remote {remote} failed: {err.Trim()}");
+    }
+
+    /// <summary>Delete a branch on the remote. Already gone is fine.</summary>
+    public async Task DeleteRemoteBranchAsync(string remote, string branch, CancellationToken ct)
+    {
+        var (code, o, err) = await RunCore(new[] { "push", "--quiet", remote, "--delete", branch }, ct);
+        if (code != 0 && !(err + o).Contains("remote ref does not exist", StringComparison.OrdinalIgnoreCase))
+            throw new GitException($"git push {remote} --delete {branch} failed: {(string.IsNullOrWhiteSpace(err) ? o : err).Trim()}");
+        // Drop our own copy of the ref too, or a stale origin/<branch> would still answer reads.
+        TryRun(out _, out _, "update-ref", "-d", $"refs/remotes/{remote}/{branch}");
+    }
+
+    /// <summary>Replace <paramref name="branch"/> on the remote with ONE parentless commit holding just
+    /// <paramref name="files"/>: no history is kept on that branch, and the clone's own branches and working
+    /// tree are never touched. The commit is built in a scratch repository and pushed with the clone's
+    /// remote URL, so it uses the same git credentials as every other push.</summary>
+    public async Task PublishOrphanBranchAsync(string remote, string branch, IReadOnlyDictionary<string, byte[]> files, string message, CancellationToken ct)
+    {
+        var url = (await RunAsync(ct, "remote", "get-url", remote)).Trim();
+        var scratchDir = Path.Combine(Path.GetTempPath(), "orch-orphan-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(scratchDir);
+        try
+        {
+            var scratch = new GitRepo(scratchDir);
+            await scratch.RunAsync(ct, "init", "--quiet");
+            foreach (var (name, bytes) in files) File.WriteAllBytes(Path.Combine(scratchDir, name), bytes);
+            await scratch.RunAsync(ct, "add", "-A");
+            await scratch.RunAsync(ct, "-c", "user.name=Orchestrator console", "-c", "user.email=console@orchestrator.invalid",
+                "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", message);
+            await scratch.RunAsync(ct, "push", "--quiet", "--force", url, $"HEAD:refs/heads/{branch}");
+        }
+        finally { try { Directory.Delete(scratchDir, recursive: true); } catch { /* temp cleanup */ } }
+    }
+
     /// <summary>The full SHA HEAD points at now, or null when it can't be read (synchronous twin of <see cref="HeadAsync"/>).</summary>
     public string? Head() => TryRun(out var o, out _, "rev-parse", "HEAD") ? o.Trim() : null;
 

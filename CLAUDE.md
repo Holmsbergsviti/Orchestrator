@@ -93,7 +93,14 @@ Only works within a LAN segment (broadcast) — one waker per broadcast domain.
 over commit polling, so the console hosts a WebSocket relay (`RelayHub`) and the agent dials
 *out* to it (`RemoteSessionService` → `Orchestrator:RelayUrl`); git only carries the session
 nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequences to keep in mind:
-- **`RelayUrl` must be configured per machine or the feature is silently unavailable there.**
+- **Where the agent dials comes from a signed, throwaway hint** (`relay-hint` branch: one parentless
+  commit with `relay-hint.json` + `.sig`, force-pushed by `ControlRepo.PublishRelayHintAsync` before the
+  session request lands on main and deleted by `RelayHintJanitor` once `RelayHub` no longer knows the
+  session). The console advertises its *name* (`RelayAdvert`), not an IP. Only agents that enforce signing
+  honour it (`SyncService`) — otherwise a copied token could redirect a PC's screen; they fall back to
+  `Orchestrator:RelayUrl`. Values land on a command line, so `RelayHint` validates them strictly; the
+  address is kept out of agent logs. Old/non-signing agents still need the manual setting below.
+- **`RelayUrl` must be configured per machine on agents that don't use the hint, or the feature is silently unavailable there.**
   `install.ps1` rewrites `appsettings.json` wholesale, so any new agent setting must be added
   as an installer parameter too, or it resets to its default on the next install.
 - Pending sessions live in `RelayHub`'s memory — restarting the console cancels them.

@@ -65,6 +65,7 @@ builder.Services.AddSingleton<RelayKeyStore>();
 builder.Services.AddSingleton<ControlSigning>();
 builder.Services.AddSingleton<ConsoleUpdater>();
 builder.Services.AddSingleton<ControlRepo>();
+builder.Services.AddHostedService<RelayHintJanitor>();
 builder.Services.AddSingleton<LoginLockout>();
 
 var listenUrl = builder.Configuration["Urls"] ?? "http://localhost:5080";
@@ -99,6 +100,12 @@ if (!string.IsNullOrWhiteSpace(opt.CertPfxPath))
         return 1;
     }
 }
+
+// What a PC is told to dial when you press Remote: this computer's name and port (see RelayAdvert).
+// Published on a throwaway branch of the control repo for the length of the session only, so PCs
+// don't need the console's address installed and the console can run from any computer.
+var relayAdvert = RelayAdvert.From(opt, listenUrl, cert?.Thumbprint);
+if (relayAdvert is not null) builder.Services.AddSingleton(relayAdvert);
 
 // Cookie-based auth for the AccessToken. Signing in (POST /login) issues this cookie;
 // everything else is gated on it by the middleware below, once a token is configured.
@@ -399,7 +406,14 @@ System.Console.WriteLine($"Open {listenUrl} in your browser.");
 // there's no way for it to discover that on its own. Print the two settings verbatim so they
 // can be copied into the agent's install command instead of guessed at.
 System.Console.WriteLine();
-System.Console.WriteLine("Remote control — settings for the agents (see docs/SETUP.md):");
+System.Console.WriteLine("Remote control:");
+if (relayAdvert is not null)
+    System.Console.WriteLine($"  When you press Remote, PCs are told to dial {relayAdvert.Url} (their agent must be up to date).\n" +
+                             "  That address is published on a throwaway branch only while the session can start, then deleted.\n" +
+                             "  Nothing needs installing on the PCs for this. Override with Console:RelayAdvertiseUrl.");
+else
+    System.Console.WriteLine("  No address to tell PCs (this console is bound to localhost): they use the Orchestrator:RelayUrl they were installed with.");
+System.Console.WriteLine("Settings for PCs whose agent can't read it from GitHub (see docs/SETUP.md):");
 System.Console.WriteLine($"  Orchestrator:RelayUrl            = {DeriveRelayUrl(listenUrl)}");
 if (cert is not null)
 {

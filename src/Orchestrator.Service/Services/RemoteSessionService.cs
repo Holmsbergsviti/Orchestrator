@@ -33,8 +33,10 @@ public interface IRemoteSessionService
 {
     /// <summary>Run one remote-control session end-to-end until it ends. Returns a process exit code.
     /// <paramref name="proof"/> is the service's signature over this machine + session (see
-    /// RelayIdentity); the relay refuses the connection without it.</summary>
-    Task<int> RunAsync(string sessionId, string? proof, CancellationToken ct = default);
+    /// RelayIdentity); the relay refuses the connection without it. <paramref name="relayUrl"/> and
+    /// <paramref name="relayThumbprint"/> come from the operator's signed relay hint; when absent the
+    /// configured Orchestrator:RelayUrl / RelayCertThumbprint are used.</summary>
+    Task<int> RunAsync(string sessionId, string? proof, string? relayUrl = null, string? relayThumbprint = null, CancellationToken ct = default);
 }
 
 [SupportedOSPlatform("windows")]
@@ -80,9 +82,14 @@ public sealed class RemoteSessionService : IRemoteSessionService
         _log = log;
     }
 
-    public async Task<int> RunAsync(string sessionId, string? proof, CancellationToken ct = default)
+    public async Task<int> RunAsync(string sessionId, string? proof, string? relayUrl = null, string? relayThumbprint = null, CancellationToken ct = default)
     {
         _proof = proof;
+        // The hint (when there is one) wins over the installed settings. Neither is ever written
+        // to the log: where the console lives shouldn't outlast the session.
+        _addressFromHint = !string.IsNullOrWhiteSpace(relayUrl);
+        _relayUrl = _addressFromHint ? relayUrl : _config.RelayUrl;
+        _relayThumbprint = _addressFromHint ? relayThumbprint : _config.RelayCertThumbprint;
         if (!OperatingSystem.IsWindows())
         {
             _log.LogWarning("remote-session: not supported on this platform");
@@ -105,12 +112,12 @@ public sealed class RemoteSessionService : IRemoteSessionService
         var outcome = "failed";
         try
         {
-            if (string.IsNullOrWhiteSpace(_config.RelayUrl))
+            if (string.IsNullOrWhiteSpace(_relayUrl))
             {
-                _log.LogWarning("remote-session {Id}: 'Orchestrator:RelayUrl' is not configured — nothing to connect to", sessionId);
+                _log.LogWarning("remote-session {Id}: no console address (no relay hint, and 'Orchestrator:RelayUrl' is not configured) — nothing to connect to", sessionId);
                 // sessionCts (not ct): clicking the banner cancels THAT, and dismissing the
                 // message should stop the wait rather than leave the process hanging around.
-                await ShowFailureAsync(banner, "Remote control isn't set up on this PC: 'Orchestrator:RelayUrl' is empty in appsettings.json.", sessionCts.Token);
+                await ShowFailureAsync(banner, "Remote control couldn't start: this PC wasn't told where the console is. Update the agent so it can read the console's address from GitHub, or set 'Orchestrator:RelayUrl' in appsettings.json.", sessionCts.Token);
                 return 1;
             }
 
@@ -150,6 +157,9 @@ public sealed class RemoteSessionService : IRemoteSessionService
 
     private string? _endReason;
     private string? _proof;   // the service's signature for this session, presented to the relay
+    private string? _relayUrl;          // where to dial: from the signed relay hint, else the installed setting
+    private string? _relayThumbprint;   // the certificate to pin for it
+    private bool _addressFromHint;      // true: keep the address out of logs and messages
 
     /// <summary>Give the session another grant of time and push the hard deadline out. Returns
     /// false when the ceiling is reached — at that point the session ends on schedule no matter
@@ -226,7 +236,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
     private async Task<int> RunSessionLoopAsync(MachineConfig machine, string sessionId, SessionBanner banner, CancellationTokenSource sessionCts)
     {
         var ct = sessionCts.Token;
-        var uri = new Uri(_config.RelayUrl.TrimEnd('/') + $"/relay/agent?machineId={Uri.EscapeDataString(machine.MachineId)}");
+        var uri = new Uri(_relayUrl!.TrimEnd('/') + $"/relay/agent?machineId={Uri.EscapeDataString(machine.MachineId)}");
 
         var (ws, error) = await ConnectWithRetriesAsync(uri, sessionId, ct);
         if (ws is null)
@@ -237,7 +247,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
 
         using (ws)
         {
-            _log.LogInformation("remote-session {Id}: connected to relay {Url}", sessionId, uri);
+            _log.LogInformation("remote-session {Id}: connected to the console's relay", sessionId);
             banner.SetState(ActiveBannerText(), SessionBanner.ColorActive);
 
             var receiveTask = ReceiveLoopAsync(ws, sessionId, banner, sessionCts);
@@ -336,8 +346,14 @@ public sealed class RemoteSessionService : IRemoteSessionService
             {
                 ws.Dispose();
                 lastError = Explain(ex, uri);
-                _log.LogWarning(ex, "remote-session {Id}: connect attempt {Attempt}/{Total} to {Url} failed",
-                    sessionId, attempt, ConnectAttempts, uri);
+                // An address that came from the relay hint stays out of the log (exception messages
+                // quote the host), so what's left is the kind of failure and the plain-language reason.
+                if (_addressFromHint)
+                    _log.LogWarning("remote-session {Id}: connect attempt {Attempt}/{Total} failed ({Kind}): {Reason}",
+                        sessionId, attempt, ConnectAttempts, ex.GetType().Name, lastError);
+                else
+                    _log.LogWarning(ex, "remote-session {Id}: connect attempt {Attempt}/{Total} to {Url} failed",
+                        sessionId, attempt, ConnectAttempts, uri);
                 if (attempt == ConnectAttempts) break;
                 try { await Task.Delay(ConnectRetryDelay, ct); }
                 catch (OperationCanceledException) { break; }
@@ -351,7 +367,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
     /// it's stricter than normal CA trust, since only the one pinned certificate is ever valid.</summary>
     private void ApplyCertificatePinning(ClientWebSocket ws)
     {
-        var pinned = NormalizeThumbprint(_config.RelayCertThumbprint);
+        var pinned = NormalizeThumbprint(_relayThumbprint);
         if (pinned.Length == 0) return;   // no pin -> normal certificate-chain validation applies
 
         ws.Options.RemoteCertificateValidationCallback = (_, cert, _, _) =>
@@ -370,17 +386,19 @@ public sealed class RemoteSessionService : IRemoteSessionService
         for (Exception? e = ex; e is not null; e = e.InnerException)
         {
             if (e is AuthenticationException)
-                return NormalizeThumbprint(_config.RelayCertThumbprint).Length == 0
+                return NormalizeThumbprint(_relayThumbprint).Length == 0
                     ? $"the console's HTTPS certificate isn't trusted by this PC. If it's self-signed, set 'Orchestrator:RelayCertThumbprint' to the thumbprint the console prints at startup."
                     : $"the console's certificate didn't match 'Orchestrator:RelayCertThumbprint'. Re-copy the thumbprint the console prints at startup.";
             if (e is SocketException)
-                return $"couldn't reach the console at {uri.Host}:{uri.Port}. Is it running, bound beyond localhost, and allowed through the firewall?";
+                return _addressFromHint
+                    ? "couldn't reach the console. Is it running on the same network, and is its port allowed through the firewall?"
+                    : $"couldn't reach the console at {uri.Host}:{uri.Port}. Is it running, bound beyond localhost, and allowed through the firewall?";
         }
         if (ex.Message.Contains("401", StringComparison.Ordinal) || ex.Message.Contains("403", StringComparison.Ordinal))
             return string.IsNullOrEmpty(_proof)
                 ? "this PC has no remote-control signing key, so the console refused it. Check the agent log for \"relay identity\"."
                 : "the console rejected this session. Either it was restarted (it forgets pending sessions — start the session again), or it doesn't recognise this PC's signing key (after a reinstall, press \"Trust new key\" in the console).";
-        return ex.Message;
+        return _addressFromHint ? ex.Message.Replace(uri.Host, "the console", StringComparison.OrdinalIgnoreCase) : ex.Message;
     }
 
     /// <summary>Reads input events from the relay and injects them on this machine, until the

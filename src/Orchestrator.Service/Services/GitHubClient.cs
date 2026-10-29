@@ -28,6 +28,10 @@ public interface IGitHubClient   // the contract for GitHub access
     /// <summary>Fetch and deserialize commands.json (admin commands). Null if missing/unreadable.</summary>
     Task<CommandFile?> GetCommandsAsync(CancellationToken ct = default);
 
+    /// <summary>Fetch the throwaway relay-hint.json (where to dial for a live session), signature
+    /// checked. Null if there isn't one, it's refused, or it can't be read. Never throws.</summary>
+    Task<RelayHintFile?> GetRelayHintAsync(CancellationToken ct = default);
+
     /// <summary>Download the raw bytes for a program file.</summary>
     Task<byte[]> DownloadFileAsync(ProgramEntry program, CancellationToken ct = default);
 
@@ -125,6 +129,26 @@ public sealed class GitHubClient : IGitHubClient
         }
     }
 
+    public async Task<RelayHintFile?> GetRelayHintAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var bytes = await GetVerifiedAsync(RelayHint.Path, ct, RelayHint.Branch);
+            return JsonSerializer.Deserialize<RelayHintFile>(bytes, JsonOpts);
+        }
+        catch (FileNotFoundException) { return null; }   // no branch / no file: the console had nothing to say
+        catch (ControlFileRejectedException ex)
+        {
+            _log.LogError("Refusing relay-hint.json: {Reason}", ex.Message);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not fetch relay-hint.json");   // non-fatal; the session falls back to the configured address
+            return null;
+        }
+    }
+
     public async Task<AgentRelease?> GetAgentReleaseAsync(CancellationToken ct = default)
     {
         try
@@ -153,17 +177,17 @@ public sealed class GitHubClient : IGitHubClient
     /// <summary>Download a control file and, when signing is enforced, its .sig — refusing the
     /// file unless the operator's signature checks out. Program binaries don't come through
     /// here: they're pinned by the SHA-256 in the (signed) manifest instead.</summary>
-    private async Task<byte[]> GetVerifiedAsync(string path, CancellationToken ct)
+    private async Task<byte[]> GetVerifiedAsync(string path, CancellationToken ct, string? branch = null)
     {
-        var bytes = await GetContentsRawAsync(path, ct);
+        var bytes = await GetContentsRawAsync(path, ct, branch);
         if (!_verifier.Enforced) return bytes;
 
         byte[]? sig;
-        try { sig = await GetContentsRawAsync(ControlSignature.SignaturePath(path), ct); }
+        try { sig = await GetContentsRawAsync(ControlSignature.SignaturePath(path), ct, branch); }
         catch (FileNotFoundException) { sig = null; }
 
         var reason = _verifier.Check(path, bytes, sig);
-        LastRejection = reason;
+        if (branch is null) LastRejection = reason;   // the sync record reports the main-branch files only
         if (reason is not null) throw new ControlFileRejectedException(reason);
         return bytes;
     }
@@ -210,11 +234,11 @@ public sealed class GitHubClient : IGitHubClient
         return null;   // not a recognizable GitHub raw url -> give up
     }
 
-    private async Task<byte[]> GetContentsRawAsync(string repoPath, CancellationToken ct)
+    private async Task<byte[]> GetContentsRawAsync(string repoPath, CancellationToken ct, string? branch = null)
     {
         var client = _httpFactory.CreateClient(HttpClientName);   // grab the pre-configured GitHub HttpClient
         var requestUri =                                          // build the Contents API URL for this file
-            $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{Uri.EscapeDataString(repoPath).Replace("%2F", "/")}?ref={Uri.EscapeDataString(_config.Branch)}";
+            $"/repos/{_config.RepoOwner}/{_config.RepoName}/contents/{Uri.EscapeDataString(repoPath).Replace("%2F", "/")}?ref={Uri.EscapeDataString(branch ?? _config.Branch)}";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, requestUri);   // create a GET request
         // "raw" media type returns file bytes directly instead of the JSON metadata wrapper.
