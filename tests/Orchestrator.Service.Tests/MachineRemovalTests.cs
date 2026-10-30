@@ -161,4 +161,14 @@ public sealed class MachineRemovalTests : IDisposable
         Assert.True((await console.SignNowAsync(default)).Ok);
         Assert.False((await console.SendCommandAsync("old-vm", "format-c", default)).Ok);
     }
+
+    [Fact]
+    public void AnUninstallRequestedBeforeTheAgentStarted_IsIgnored_SoAReinstallIsNotRemoved()
+    {
+        var started = new DateTimeOffset(2026, 10, 29, 22, 33, 0, TimeSpan.Zero);   // the reinstall
+        Assert.True(OneShotExpiry.RequestedBefore("2026-10-29T22:28:51.1715570+00:00", started));    // pressed before it: stale
+        Assert.False(OneShotExpiry.RequestedBefore("2026-10-29T22:40:00.0000000+00:00", started));   // pressed while it was running: act on it
+        Assert.True(OneShotExpiry.RequestedBefore(null, started));                                   // unreadable: fail safe
+        Assert.True(OneShotExpiry.RequestedBefore("garbage", started));
+    }
 }

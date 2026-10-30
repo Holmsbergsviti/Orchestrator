@@ -109,6 +109,14 @@ public static class OneShotExpiry
         return false;
     }
 
+    /// <summary>True when the request was made BEFORE <paramref name="since"/>. Used for "uninstall": an agent
+    /// installed again within the command's hour keeps its machine id (config.json survives a reinstall over the
+    /// same folder) and has forgotten nothing about a command it never ran, so it would find the old one and
+    /// remove itself. Insisting the request was made while THIS service run was up rules that out. A request
+    /// with no readable date counts as stale: failing safe means pressing the button again, not a lost agent.</summary>
+    public static bool RequestedBefore(string? requestedUtc, DateTimeOffset since)
+        => !TryParseUtc(requestedUtc, out var requested) || requested < since;
+
     // Culture-independent, and a timestamp with no offset is read as UTC (the console always writes "O" format).
     private static bool TryParseUtc(string? s, out DateTimeOffset value)
         => DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
