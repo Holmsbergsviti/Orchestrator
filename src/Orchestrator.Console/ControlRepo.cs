@@ -41,6 +41,14 @@ public sealed class ConsoleOptions
     /// <summary>The ws(s):// address PCs should dial for live screen sessions, if it isn't simply this
     /// computer's name and the port in <c>Urls</c> (say, a VPN name). Blank = work it out. See RelayAdvert.</summary>
     public string RelayAdvertiseUrl { get; set; } = "";
+    /// <summary>Start a free Cloudflare quick tunnel so PCs on OTHER networks can reach the relay without
+    /// this computer's address being shared. Needs cloudflared installed. See TunnelService.</summary>
+    public bool Tunnel { get; set; }
+    /// <summary>The cloudflared program (a full path if it isn't on PATH).</summary>
+    public string TunnelCommand { get; set; } = "cloudflared";
+    /// <summary>A private loopback-only port the tunnel points at. It serves the agent relay path and
+    /// nothing else; it must differ from the port in <c>Urls</c>.</summary>
+    public int TunnelPort { get; set; } = 5081;
 }
 
 // ---- wire models (what the web page receives / sends) --------------------------------
@@ -282,16 +290,19 @@ public sealed class ControlRepo
     private readonly RelayHub _relay;
     private readonly RelayKeyStore _keys;
     private readonly ControlSigning _signing;
-    private readonly RelayAdvert? _advert;   // what a PC is told to dial for a session; null = nothing to say
+    private readonly RelayAdvert? _advert;   // the console's own LAN name; null = nothing to say
+    private readonly TunnelService? _tunnel; // when it is up, THIS is what PCs are told to dial (it works from any network)
+    private RelayAdvert? CurrentAdvert => _tunnel?.Advert ?? _advert;
     private readonly ILogger<ControlRepo> _log;
 
     /// <summary>The files agents refuse unless signed (agent.json too, but CI signs that one).</summary>
     private static readonly string[] SignedFiles = { ManifestPath, "commands.json" };
 
-    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, ILogger<ControlRepo> log, RelayAdvert? advert = null)
+    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, ILogger<ControlRepo> log, RelayAdvert? advert = null, TunnelService? tunnel = null)
     {
         _signing = signing;
         _advert = advert;
+        _tunnel = tunnel;
         _opt = opt;
         _git = new GitRepo(opt.ControlRepoPath);
         _relay = relay;
@@ -912,14 +923,15 @@ public sealed class ControlRepo
     /// Must be called with the write gate held.</summary>
     private async Task<bool> PublishRelayHintAsync(string machineId, string sessionId, CancellationToken ct)
     {
-        if (_advert is null || !_signing.HasKey) return false;
+        var advert = CurrentAdvert;   // read once: the tunnel can drop between two reads
+        if (advert is null || !_signing.HasKey) return false;
         await RewriteRelayHintAsync(sessions =>
         {
             sessions[machineId] = new JsonObject
             {
                 ["id"] = sessionId,
-                ["relayUrl"] = _advert.Url,
-                ["relayCertThumbprint"] = _advert.Thumbprint
+                ["relayUrl"] = advert.Url,
+                ["relayCertThumbprint"] = advert.Thumbprint
             };
         }, ct, alsoKeep: sessionId);   // the relay only learns of this session once its request is on GitHub
         _hintIds[sessionId] = 0;
