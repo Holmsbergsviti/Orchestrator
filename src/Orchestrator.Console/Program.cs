@@ -66,11 +66,26 @@ builder.Services.AddSingleton<ControlSigning>();
 builder.Services.AddSingleton<ConsoleUpdater>();
 builder.Services.AddSingleton<ControlRepo>();
 builder.Services.AddHostedService<RelayHintJanitor>();
+builder.Services.AddSingleton<TunnelService>();   // inert unless Console:Tunnel is on
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TunnelService>());
 builder.Services.AddSingleton<LoginLockout>();
 
 var listenUrl = builder.Configuration["Urls"] ?? "http://localhost:5080";
-builder.WebHost.UseUrls(listenUrl);   // apply the configured address explicitly
 var isLocalOnly = ConsoleAuth.IsLocalUrl(listenUrl);
+if (opt.Tunnel)
+{
+    // The tunnel points at its own loopback-only listener, so the operator's pages and API are
+    // never reachable through it (see the guard in the middleware below).
+    if (opt.TunnelPort is < 1 or > 65535 ||
+        listenUrl.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                 .Any(u => Uri.TryCreate(u.Replace("://*:", "://x:").Replace("://+:", "://x:"), UriKind.Absolute, out var lu) && lu.Port == opt.TunnelPort))
+    {
+        System.Console.Error.WriteLine($"ERROR: 'Console:TunnelPort' ({opt.TunnelPort}) must be a valid port that 'Urls' ({listenUrl}) doesn't already use.");
+        return 1;
+    }
+    builder.WebHost.UseUrls($"{listenUrl};http://127.0.0.1:{opt.TunnelPort}");
+}
+else builder.WebHost.UseUrls(listenUrl);   // apply the configured address explicitly
 
 // Load the HTTPS certificate (if configured) BEFORE the host is built — Kestrel options
 // can only be set at this point. A configured-but-unreadable cert is a hard failure: better
@@ -155,6 +170,22 @@ if (string.IsNullOrWhiteSpace(opt.ControlRepoPath) || !repo.RepoIsValid())
         (string.IsNullOrWhiteSpace(opt.ControlRepoPath) ? "<empty>" : opt.ControlRepoPath));
     return 1;
 }
+
+// Requests that arrive on the tunnel's private listener came from the public internet. They may
+// reach the agent relay (which has its own per-session token + signature check) and NOTHING else:
+// no pages, no API, no login form. This runs before everything, auth included, because a request
+// via cloudflared looks like it came from this computer and a console without an AccessToken
+// would otherwise treat it as the operator.
+if (opt.Tunnel)
+    app.Use(async (ctx, next) =>
+    {
+        if (ctx.Connection.LocalPort == opt.TunnelPort && !ctx.Request.Path.StartsWithSegments("/relay/agent"))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        await next();
+    });
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -414,11 +445,15 @@ System.Console.WriteLine($"Open {listenUrl} in your browser.");
 // can be copied into the agent's install command instead of guessed at.
 System.Console.WriteLine();
 System.Console.WriteLine("Remote control:");
+if (opt.Tunnel)
+    System.Console.WriteLine($"  Tunnel: starting '{opt.TunnelCommand}' (free Cloudflare quick tunnel) so PCs on any network can reach this console.\n" +
+                             "  Your IP is never shared; the address PCs dial is a random trycloudflare.com name that changes each start.\n" +
+                             "  Only the agent relay path is reachable through it. Watch the log for 'tunnel: up'. Cloudflare can see the screen stream in transit.");
 if (relayAdvert is not null)
-    System.Console.WriteLine($"  When you press Remote, PCs are told to dial {relayAdvert.Url} (their agent must be up to date).\n" +
+    System.Console.WriteLine($"  {(opt.Tunnel ? "If the tunnel is down, " : "")}When you press Remote, PCs are told to dial {relayAdvert.Url} (their agent must be up to date).\n" +
                              "  That address is published on a throwaway branch only while the session can start, then deleted.\n" +
                              "  Nothing needs installing on the PCs for this. Override with Console:RelayAdvertiseUrl.");
-else
+else if (!opt.Tunnel)
     System.Console.WriteLine("  No address to tell PCs (this console is bound to localhost): they use the Orchestrator:RelayUrl they were installed with.");
 System.Console.WriteLine("Settings for PCs whose agent can't read it from GitHub (see docs/SETUP.md):");
 System.Console.WriteLine($"  Orchestrator:RelayUrl            = {DeriveRelayUrl(listenUrl)}");
@@ -438,7 +473,7 @@ if (cert is not null)
         _ => $"  Certificate valid until {cert.NotAfter:yyyy-MM-dd} ({daysLeft} days)."
     });
 }
-if (isLocalOnly)
+if (isLocalOnly && !opt.Tunnel)
     System.Console.WriteLine("  NOTE: this console is bound to localhost, so only an agent on THIS machine can reach it.\n" +
                              "        To control other machines, set Urls to https://0.0.0.0:<port> (which also requires\n" +
                              "        Console:AccessToken and Console:CertPfxPath).");

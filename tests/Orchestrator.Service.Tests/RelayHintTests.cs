@@ -257,4 +257,64 @@ public sealed class RelayHintTests : IDisposable
     [Fact]
     public void TheThumbprintTravelsWithTheAddress()
         => Assert.Equal(Thumb, RelayAdvert.From(new ConsoleOptions(), "https://0.0.0.0:5080", Thumb, "pc", false)!.Thumbprint);
+
+    // ---- the Cloudflare tunnel ---------------------------------------------------------------
+
+    [Theory]
+    [InlineData("2026-10-30T08:00:00Z INF |  https://quiet-fox-1234.trycloudflare.com                    |", "quiet-fox-1234.trycloudflare.com")]
+    [InlineData("INF Visit it at https://Mixed-Case.trycloudflare.com", "mixed-case.trycloudflare.com")]
+    [InlineData("INF Requesting new quick Tunnel on https://api.trycloudflare.com ...", null)]   // cloudflared's own endpoint
+    [InlineData("INF Registered tunnel connection connIndex=0", null)]
+    [InlineData("https://example.com/trycloudflare.com", null)]
+    [InlineData("", null)]
+    public void TheTunnelNameIsReadFromCloudflaredsOutput(string line, string? expected)
+        => Assert.Equal(expected, TunnelService.ParsePublicHost(line));
+
+    [Fact]
+    public void TheTunnelIsOnlyUsableOnceCloudflaredSaysItIsConnected()
+    {
+        Assert.True(TunnelService.IsUpLine("INF Registered tunnel connection connIndex=0 location=ams01"));
+        Assert.False(TunnelService.IsUpLine("INF Requesting new quick Tunnel"));
+    }
+
+    [Fact]
+    public void ATunnelAddressIsWellFormedForAnAgent_WithNoThumbprintToPin()
+    {
+        var advert = new RelayAdvert("wss://quiet-fox-1234.trycloudflare.com", "");
+        Assert.True(RelayHint.IsWellFormedUrl(advert.Url));
+        Assert.Equal((advert.Url, ""), RelayHint.Pick(Hint("m1", "abc", advert.Url, advert.Thumbprint), "m1", "abc"));
+    }
+
+    [Fact]
+    public async Task WhenTheTunnelIsUp_PCsAreToldToDialItInsteadOfTheLanName_AndNothingIsPinned()
+    {
+        var tunnel = new TunnelService(new ConsoleOptions(), NullLogger<TunnelService>.Instance);
+        var console = new ControlRepo(new ConsoleOptions { ControlRepoPath = Mine, Remote = "origin", MainBranch = "main", SigningKeyPath = _keyPath },
+            _hub, new RelayKeyStore(Path.Combine(_root, "pins.json"), NullLogger<RelayKeyStore>.Instance),
+            new ControlSigning(_keyPath), NullLogger<ControlRepo>.Instance, Advert, tunnel);
+        Assert.True((await console.SignNowAsync(default)).Ok);
+
+        tunnel.SetAdvert(new RelayAdvert("wss://quiet-fox-1234.trycloudflare.com", ""));
+        var result = await console.StartRemoteSessionAsync("m1", default);
+        Assert.True(result.Ok, result.Message);
+
+        var content = Encoding.UTF8.GetBytes(OnGitHub("show", "relay-hint:relay-hint.json") + "\n");
+        var file = JsonSerializer.Deserialize<RelayHintFile>(content)!;
+        Assert.Equal(("wss://quiet-fox-1234.trycloudflare.com", ""), RelayHint.Pick(file, "m1", result.SessionId!));
+        Assert.DoesNotContain("operator-mac", Encoding.UTF8.GetString(content));   // the LAN name isn't mentioned at all
+    }
+
+    [Fact]
+    public async Task WhenTheTunnelIsDown_TheLanNameIsAdvertisedAsBefore()
+    {
+        var tunnel = new TunnelService(new ConsoleOptions(), NullLogger<TunnelService>.Instance);   // never started: no address
+        var console = new ControlRepo(new ConsoleOptions { ControlRepoPath = Mine, Remote = "origin", MainBranch = "main", SigningKeyPath = _keyPath },
+            _hub, new RelayKeyStore(Path.Combine(_root, "pins.json"), NullLogger<RelayKeyStore>.Instance),
+            new ControlSigning(_keyPath), NullLogger<ControlRepo>.Instance, Advert, tunnel);
+        Assert.True((await console.SignNowAsync(default)).Ok);
+
+        var result = await console.StartRemoteSessionAsync("m1", default);
+        var content = Encoding.UTF8.GetBytes(OnGitHub("show", "relay-hint:relay-hint.json") + "\n");
+        Assert.Equal(("wss://operator-mac.local:5080", Thumb), RelayHint.Pick(JsonSerializer.Deserialize<RelayHintFile>(content)!, "m1", result.SessionId!));
+    }
 }

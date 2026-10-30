@@ -173,7 +173,22 @@ on the same network (or VPN) with no reinstall, and you never type an address an
   token could otherwise point a PC's screen at their own server) and uses the manual setting below.
 - To advertise something other than "this computer's name + the port in `Urls`" (a VPN name, say),
   set `Console:RelayAdvertiseUrl` (for example `wss://ops.example.net:5080`).
-- A console bound to `localhost` advertises nothing; PCs then use the manual setting below.
+- A console bound to `localhost` advertises nothing; PCs then use the manual setting below (unless the tunnel is on).
+- **PCs on other networks (the tunnel).** The console's name only resolves on its own network. To reach
+  PCs anywhere without sharing or opening your address, install `cloudflared` on the console's computer
+  (`brew install cloudflared`, or `winget install Cloudflare.cloudflared`) and set `Console:Tunnel` to
+  `true`. The console then starts a free Cloudflare quick tunnel itself: it dials out to Cloudflare,
+  gets a random `https://….trycloudflare.com` name (new on every start), and that name replaces the
+  console's own name in the hint. No account, no open port, no change on the PCs, and the console can
+  stay bound to `localhost`. Things to know:
+  - Only the **agent relay path** is reachable through the tunnel: it points at its own loopback
+    listener (`Console:TunnelPort`) that answers 404 to everything else, so your pages and API are never
+    on the internet. A session still needs its single-use token and the PC's signature.
+  - The screen stream passes **through Cloudflare** (inside HTTPS, but Cloudflare terminates it), so
+    they could see it in transit. If that is not acceptable, use a VPN (Tailscale) with
+    `Console:RelayAdvertiseUrl` instead.
+  - The console logs `tunnel: up` once it works. If `cloudflared` is missing or the tunnel is down,
+    PCs are told the console's own name as before.
 - GitHub itself keeps unreachable commits for a while after a branch is deleted; they are not
   visible on the repo and can only be fetched by their exact id.
 

@@ -258,5 +258,7 @@ Write-Host "Done. Service '$ServiceName' is running. Logs: $InstallRoot\logs" -F
 if ($RelayUrl) {
     Write-Host "Live remote control: enabled (relay $RelayUrl)." -ForegroundColor Green
 } else {
-    Write-Host "Live remote control: NOT configured. Re-run with -RelayUrl <the address the console prints> to enable it." -ForegroundColor Yellow
+    # No fixed address is not an error: a current agent is told where the console is, through GitHub, each time
+    # a session is requested. -RelayUrl is only the fallback for builds that don't verify signatures.
+    Write-Host "Live remote control: ready. This PC is told where the console is when you press Remote (no -RelayUrl needed)." -ForegroundColor Green
 }
