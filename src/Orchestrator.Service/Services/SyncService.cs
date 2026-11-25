@@ -418,16 +418,17 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 // installed here). A build that doesn't verify signatures must NOT: with a copied
                 // token anyone could write that file and point this PC's screen at their server,
                 // so it keeps using Orchestrator:RelayUrl.
-                string? relayUrl = null, relayThumbprint = null;
+                string? relayUrl = null, relayThumbprint = null, relayKey = null;
                 if (_verifier.Enforced)
                 {
-                    var hint = RelayHint.Pick(await _github.GetRelayHintAsync(ct), machine.MachineId, session.Id);
-                    if (hint is { } h) { relayUrl = h.Url; relayThumbprint = h.Thumbprint; }
+                    var hintFile = await _github.GetRelayHintAsync(ct);
+                    var hint = RelayHint.Pick(hintFile, machine.MachineId, session.Id);
+                    if (hint is { } h) { relayUrl = h.Url; relayThumbprint = h.Thumbprint; relayKey = RelayHint.PickKey(hintFile, machine.MachineId, session.Id); }
                     else _log.LogInformation("remote-session '{Id}': no relay hint for this session; using the configured address, if any", session.Id);
                 }
                 // Size the task's kill-switch for a fully renewed session, not a single grant —
                 // otherwise Task Scheduler would terminate a session the operator legitimately extended.
-                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, proof, _config.RemoteSessionAbsoluteMax, relayUrl, relayThumbprint);
+                _scheduledTasks.RunInteractiveRemoteSessionOnce(session.Id, proof, _config.RemoteSessionAbsoluteMax, relayUrl, relayThumbprint, relayKey);
             }
             else
                 // Print BOTH clocks. The usual cause isn't a slow sync, it's this machine's clock

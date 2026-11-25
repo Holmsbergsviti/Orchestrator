@@ -29,6 +29,10 @@ public sealed class RelayHub
         public required string MachineId { get; init; }
         /// <summary>The machine's pinned public key: the agent must sign with its private half.</summary>
         public required string AgentPublicKey { get; init; }
+        /// <summary>Present when this session is end-to-end encrypted (its address goes through the tunnel).</summary>
+        public RelayCipher? Cipher { get; init; }
+        /// <summary>Why the session ended, if the relay itself ended it; shown to the viewer.</summary>
+        public string? EndedReason { get; set; }
         public DateTimeOffset ExpiresUtc { get; set; }
         public WebSocket? Viewer { get; set; }
         public WebSocket? Agent { get; set; }
@@ -55,12 +59,16 @@ public sealed class RelayHub
     /// agent (bearer token) and viewer (query string) connections are recognized once they
     /// eventually arrive. <paramref name="validFor"/> bounds how long this console will wait
     /// for BOTH sides to show up before giving up.</summary>
-    public void RegisterPending(string sessionId, string machineId, string agentPublicKey, TimeSpan validFor)
+    /// <param name="e2eKey">The session's encryption key, when its traffic is to be sealed end to end.
+    /// A session registered with one accepts ONLY sealed messages from the agent: there is no
+    /// fall-back to plaintext for something in the middle to force.</param>
+    public void RegisterPending(string sessionId, string machineId, string agentPublicKey, TimeSpan validFor, string? e2eKey = null)
         => _sessions[sessionId] = new RelaySession
         {
             MachineId = machineId,
             AgentPublicKey = agentPublicKey,
-            ExpiresUtc = DateTimeOffset.UtcNow.Add(validFor)
+            ExpiresUtc = DateTimeOffset.UtcNow.Add(validFor),
+            Cipher = e2eKey is null ? null : new RelayCipher(e2eKey, sessionId, isAgent: false)
         };
 
     /// <summary>The id of an already-live-or-pending session for this machine, or null. Used to stop
@@ -161,7 +169,16 @@ public sealed class RelayHub
             // Pump FROM this handler's OWN socket TO the peer. The peer's own connection
             // handler is doing the same in the other direction concurrently — one concurrent
             // reader and one concurrent writer per socket is the safe, documented pattern.
-            await PumpAsync(socket, other, isAgent ? s.ViewerSendGate : null, linkedCt.Token);
+            if (s.Cipher is null)
+                await PumpAsync(socket, other, isAgent ? s.ViewerSendGate : null, linkedCt.Token);
+            else if (isAgent)
+                await RelayEncryptedPump.FromAgentAsync(socket, other, s.ViewerSendGate, s.Cipher, why =>
+                {
+                    s.EndedReason = why;
+                    _log.LogWarning("relay: ending session {Id} (machine {MachineId}): {Why}", sessionId, s.MachineId, why);
+                }, linkedCt.Token);
+            else
+                await RelayEncryptedPump.FromViewerAsync(socket, other, s.Cipher, linkedCt.Token);
         }
         finally
         {
@@ -169,7 +186,7 @@ public sealed class RelayHub
             // ReceiveAsync aborts that socket, so once the teardown below starts, the viewer's
             // close frame can no longer carry a reason and the browser only sees a bare 1006.
             if (isAgent)
-                await SendStatusAsync(s, "{\"t\":\"status\",\"state\":\"ended\",\"reason\":\"the machine ended the session\"}", CancellationToken.None);
+                await SendStatusAsync(s, $"{{\"t\":\"status\",\"state\":\"ended\",\"reason\":{System.Text.Json.JsonSerializer.Serialize(s.EndedReason ?? "the machine ended the session")}}}", CancellationToken.None);
 
             // Tell the peer's pump (blocked in ReceiveAsync on ITS OWN socket) to stop, via
             // cancellation — never by touching the peer's socket from here.

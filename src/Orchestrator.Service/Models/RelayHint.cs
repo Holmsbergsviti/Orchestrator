@@ -18,6 +18,7 @@
 
 using System.Text.RegularExpressions;   // the strict value patterns
 using System.Text.Json.Serialization;   // [JsonPropertyName]
+using Orchestrator.Service.Services;    // RelayCipher (the key's shape)
 
 namespace Orchestrator.Service.Models;
 
@@ -37,6 +38,9 @@ public sealed class RelayHintEntry
     [JsonPropertyName("relayUrl")] public string RelayUrl { get; set; } = string.Empty;
     /// <summary>SHA-1 thumbprint to pin, or empty to use normal certificate validation.</summary>
     [JsonPropertyName("relayCertThumbprint")] public string? RelayCertThumbprint { get; set; }
+    /// <summary>When present, this session's traffic must be sealed end to end with this key (see RelayCipher):
+    /// the address goes through a tunnel whose operator must not be able to read the screen.</summary>
+    [JsonPropertyName("relayKey")] public string? RelayKey { get; set; }
 }
 
 public static class RelayHint
@@ -64,6 +68,19 @@ public static class RelayHint
             entry = file.Sessions.FirstOrDefault(kv => string.Equals(kv.Key, machineId, StringComparison.OrdinalIgnoreCase)).Value;
         if (entry is null || entry.Id != sessionId) return null;   // a hint for some other session is not ours
         if (!IsWellFormedUrl(entry.RelayUrl) || !IsWellFormedThumbprint(entry.RelayCertThumbprint)) return null;
+        // A key that is there but malformed is a reason NOT to connect: carrying on without it would
+        // send the screen in the clear through the very tunnel the key exists to protect against.
+        if (!string.IsNullOrEmpty(entry.RelayKey) && !RelayCipher.IsWellFormedKey(entry.RelayKey)) return null;
         return (entry.RelayUrl, entry.RelayCertThumbprint ?? "");
+    }
+
+    /// <summary>The end-to-end key for this machine's session, or null when the session isn't encrypted.
+    /// Call only for an entry <see cref="Pick"/> accepted.</summary>
+    public static string? PickKey(RelayHintFile? file, string machineId, string sessionId)
+    {
+        if (Pick(file, machineId, sessionId) is null) return null;
+        if (!file!.Sessions.TryGetValue(machineId, out var entry))
+            entry = file.Sessions.FirstOrDefault(kv => string.Equals(kv.Key, machineId, StringComparison.OrdinalIgnoreCase)).Value;
+        return string.IsNullOrEmpty(entry?.RelayKey) ? null : entry!.RelayKey;
     }
 }

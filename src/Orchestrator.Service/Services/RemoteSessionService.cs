@@ -36,7 +36,7 @@ public interface IRemoteSessionService
     /// RelayIdentity); the relay refuses the connection without it. <paramref name="relayUrl"/> and
     /// <paramref name="relayThumbprint"/> come from the operator's signed relay hint; when absent the
     /// configured Orchestrator:RelayUrl / RelayCertThumbprint are used.</summary>
-    Task<int> RunAsync(string sessionId, string? proof, string? relayUrl = null, string? relayThumbprint = null, CancellationToken ct = default);
+    Task<int> RunAsync(string sessionId, string? proof, string? relayUrl = null, string? relayThumbprint = null, CancellationToken ct = default, string? relayKey = null);
 }
 
 [SupportedOSPlatform("windows")]
@@ -82,9 +82,14 @@ public sealed class RemoteSessionService : IRemoteSessionService
         _log = log;
     }
 
-    public async Task<int> RunAsync(string sessionId, string? proof, string? relayUrl = null, string? relayThumbprint = null, CancellationToken ct = default)
+    public async Task<int> RunAsync(string sessionId, string? proof, string? relayUrl = null, string? relayThumbprint = null, CancellationToken ct = default, string? relayKey = null)
     {
         _proof = proof;
+        // A session key means the traffic crosses a tunnel whose operator must not read it: seal
+        // everything, both ways. It only ever comes from the signed hint, together with the address.
+        _cipher = !string.IsNullOrEmpty(relayKey) && RelayCipher.IsWellFormedKey(relayKey)
+            ? new RelayCipher(relayKey, sessionId, isAgent: true)
+            : null;
         // The hint (when there is one) wins over the installed settings. Neither is ever written
         // to the log: where the console lives shouldn't outlast the session.
         _addressFromHint = !string.IsNullOrWhiteSpace(relayUrl);
@@ -157,6 +162,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
 
     private string? _endReason;
     private string? _proof;   // the service's signature for this session, presented to the relay
+    private RelayCipher? _cipher;   // set when this session is sealed end to end; null = plain, as before
     private string? _relayUrl;          // where to dial: from the signed relay hint, else the installed setting
     private string? _relayThumbprint;   // the certificate to pin for it
     private bool _addressFromHint;      // true: keep the address out of logs and messages
@@ -268,7 +274,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
                         nextDeadlineBroadcast = now + DeadlineBroadcast;
                         var canRenew = _grantsUsed < OrchestratorConfig.MaxSessionGrants;
                         var json = $"{{\"t\":\"deadline\",\"untilUtc\":\"{Deadline.UtcDateTime:O}\",\"canRenew\":{(canRenew ? "true" : "false")}}}";
-                        try { await ws.SendAsync(System.Text.Encoding.UTF8.GetBytes(json).AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct); }
+                        try { await SendAsync(ws, System.Text.Encoding.UTF8.GetBytes(json), isText: true, ct); }
                         catch (Exception ex) { _log.LogDebug(ex, "remote-session {Id}: deadline broadcast failed", sessionId); break; }
                     }
 
@@ -291,7 +297,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
                             // .AsMemory() (not a bare byte[]) to pick the Memory<byte> overload
                             // unambiguously — WebSocket exposes both an ArraySegment<byte> and a
                             // Memory<byte> overload, and byte[] converts implicitly to either.
-                            await ws.SendAsync(jpeg.AsMemory(), WebSocketMessageType.Binary, endOfMessage: true, ct);
+                            await SendAsync(ws, jpeg, isText: false, ct);
                             lastSent = jpeg;
                             lastSentAt = now;
                         }
@@ -322,6 +328,15 @@ public sealed class RemoteSessionService : IRemoteSessionService
 
         _log.LogInformation("remote-session {Id}: ended", sessionId);
         return 0;
+    }
+
+    /// <summary>The one way anything is written to the relay: sealed when the session is encrypted
+    /// (as a single binary message whatever it carries), as itself otherwise.</summary>
+    private Task SendAsync(ClientWebSocket ws, byte[] payload, bool isText, CancellationToken ct)
+    {
+        if (_cipher is null)
+            return ws.SendAsync(payload.AsMemory(), isText ? WebSocketMessageType.Text : WebSocketMessageType.Binary, endOfMessage: true, ct).AsTask();
+        return ws.SendAsync(_cipher.Seal(isText, payload).AsMemory(), WebSocketMessageType.Binary, endOfMessage: true, ct).AsTask();
     }
 
     /// <summary>Try to reach the relay a few times before giving up. Returns the live socket, or
@@ -415,9 +430,11 @@ public sealed class RemoteSessionService : IRemoteSessionService
             {
                 var result = await ws.ReceiveAsync(buffer.AsMemory(), ct);
                 if (result.MessageType == WebSocketMessageType.Close) break;
-                if (result.MessageType != WebSocketMessageType.Text)
+                // Plain sessions carry text; encrypted ones carry only sealed binary messages.
+                var expected = _cipher is null ? WebSocketMessageType.Text : WebSocketMessageType.Binary;
+                if (result.MessageType != expected)
                 {
-                    message.Clear();   // the viewer never sends binary; ignore it entirely
+                    message.Clear();   // the viewer never sends the other kind; ignore it entirely
                     continue;
                 }
 
@@ -430,7 +447,28 @@ public sealed class RemoteSessionService : IRemoteSessionService
                     continue;
                 }
 
-                var text = System.Text.Encoding.UTF8.GetString(message.ToArray());
+                string text;
+                if (_cipher is null)
+                    text = System.Text.Encoding.UTF8.GetString(message.ToArray());
+                else
+                {
+                    try
+                    {
+                        var (isText, payload) = _cipher.Open(message.ToArray());
+                        if (!isText) { message.Clear(); continue; }   // input is always text
+                        text = System.Text.Encoding.UTF8.GetString(payload);
+                    }
+                    catch (System.Security.Cryptography.CryptographicException)
+                    {
+                        // Altered, replayed or out of sequence: whatever is on the other end is not the
+                        // console we were given the key for. Nothing from it is injected as input.
+                        _log.LogWarning("remote-session {Id}: a message failed to decrypt; ending the session", sessionId);
+                        SetEndReason("decrypt-failed");
+                        SafeCancel(sessionCts);
+                        break;
+                    }
+                    finally { message.Clear(); }
+                }
                 message.Clear();
 
                 if (!RemoteInputEvent.TryParse(text, out var evt))
