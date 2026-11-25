@@ -256,6 +256,13 @@ app.MapGet("/api/state", async (ControlRepo r, CancellationToken ct) =>
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
+// What the operator has done from this console (the history of the control repo, read back).
+app.MapGet("/api/activity", async (int? limit, ControlRepo r, CancellationToken ct) =>
+{
+    try { return Results.Ok(await r.ActivityAsync(limit ?? 100, ct)); }
+    catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
+});
+
 // Save targeting + label edits (commits and pushes).
 app.MapPost("/api/save", async (SaveRequest req, ControlRepo r, CancellationToken ct) =>
 {

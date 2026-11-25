@@ -255,6 +255,8 @@ public sealed class RemoteSessionService : IRemoteSessionService
         {
             _log.LogInformation("remote-session {Id}: connected to the console's relay", sessionId);
             banner.SetState(ActiveBannerText(), SessionBanner.ColorActive);
+            if (!banner.ExcludedFromCapture)
+                _log.LogInformation("remote-session {Id}: this Windows can't hide the banner from the screen capture (needs Windows 10 2004+), so it appears in the operator's view", sessionId);
 
             var receiveTask = ReceiveLoopAsync(ws, sessionId, banner, sessionCts);
             var nextDeadlineBroadcast = DateTimeOffset.MinValue;

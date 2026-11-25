@@ -324,4 +324,71 @@ public sealed class RelayHintTests : IDisposable
         Assert.Null(RelayHint.PickKey(lan, "m1", result.SessionId!));   // on your own network nothing is encrypted, as before
         Assert.DoesNotContain("relayKey", Encoding.UTF8.GetString(content));
     }
+
+    // ---- the activity log (the history of "console: ..." commits, read back) ------------------
+
+    [Theory]
+    [InlineData("console: restart m-1 (2026-11-25 13:00:00Z)", "restart", "m-1", null)]
+    [InlineData("console: shutdown m-1 (2026-11-25 13:00:00Z)", "shutdown", "m-1", null)]
+    [InlineData("console: uninstall m-1 (2026-11-25 13:00:00Z)", "uninstall", "m-1", null)]
+    [InlineData("console: remote-session m-1 (2026-11-25 13:00:00Z)", "remote", "m-1", null)]
+    [InlineData("console: screenshot m-1 (2026-11-25 13:00:00Z)", "screenshot", "m-1", null)]
+    [InlineData("console: removed machine ICT-9 (3af4a185-015f-4169-ad18-f2fb320fa6b4)", "removed", "3af4a185-015f-4169-ad18-f2fb320fa6b4", "ICT-9")]
+    [InlineData("console: run-now my-app (2026-11-25 13:00:00Z)", "run-now", null, "my-app")]
+    [InlineData("console: add program my-app (2026-11-25 13:00:00Z)", "add-program", null, "my-app")]
+    [InlineData("console: delete program my-app (2026-11-25 13:00:00Z)", "delete-program", null, "my-app")]
+    [InlineData("console: update programs/targeting/labels (2026-11-25 13:00:00Z)", "save", null, null)]
+    public void TheActivityLogUnderstandsWhatTheConsoleWrites(string subject, string kind, string? machine, string? detail)
+    {
+        var e = ActivityLog.Parse("abcdef0123456789", "2026-11-25T13:00:00+00:00", subject)!;
+        Assert.Equal(kind, e.Kind);
+        Assert.Equal(machine is null ? 0 : 1, e.MachineIds.Count);
+        if (machine is not null) Assert.Equal(machine, e.MachineIds[0]);
+        Assert.Equal(detail, e.Detail);
+        Assert.Equal("abcdef0", e.Commit);
+    }
+
+    [Fact]
+    public void AWakeNamesEveryMachineItWoke()
+    {
+        var e = ActivityLog.Parse("abc", "2026-11-25T13:00:00+00:00", "console: wake 2 machine(s): m-1,m-2 (2026-11-25 13:00:00Z)")!;
+        Assert.Equal(new[] { "m-1", "m-2" }, e.MachineIds);
+        // older commits didn't list them: still shown, just not attributed
+        Assert.Empty(ActivityLog.Parse("abc", "2026-11-25T13:00:00+00:00", "console: wake 2 machine(s) (2026-11-25 13:00:00Z)")!.MachineIds);
+    }
+
+    [Theory]
+    [InlineData("console: relay hint")]
+    [InlineData("console: sign manifest.json, commands.json (2026-11-25 13:00:00Z)")]
+    [InlineData("heartbeat: WIN-1 (m-1) 2026-11-25T13:00:00+00:00")]
+    [InlineData("Merge pull request #7 from x/y")]
+    [InlineData("console: something we have never heard of")]
+    public void HousekeepingAndForeignCommitsAreNotInTheLog(string subject)
+        => Assert.Null(ActivityLog.Parse("abc", "2026-11-25T13:00:00+00:00", subject));
+
+    [Fact]
+    public void TheLogIsNewestFirstAndBounded()
+    {
+        var entries = Enumerable.Range(0, 10).Select(i => new ActivityEntry { Utc = $"2026-11-25T13:0{i}:00+00:00", Kind = "restart", Commit = i.ToString() });
+        var merged = ActivityLog.Merge(entries.Reverse(), 3);
+        Assert.Equal(new[] { "9", "8", "7" }, merged.Select(e => e.Commit));
+    }
+
+    [Fact]
+    public async Task WhatTheOperatorDoesShowsUpInTheLog_FromTheRealCommits()
+    {
+        var console = await ConsoleWithSignedMain(Advert);
+        var started = await console.StartRemoteSessionAsync("m1", default);
+        Assert.True(started.Ok, started.Message);
+        var shot = await console.SendScreenshotAsync("m1", default);
+        Assert.True(shot.Ok, shot.Message);
+        var power = await console.SendCommandAsync("m1", "restart", default);
+        Assert.True(power.Ok, power.Message);
+
+        var log = await console.ActivityAsync(50, default);
+
+        Assert.Equal(new[] { "restart", "screenshot", "remote" }, log.Where(e => e.MachineIds.Contains("m1")).Select(e => e.Kind));   // newest first
+        Assert.DoesNotContain(log, e => e.Kind is "save" && e.MachineIds.Count > 0);
+        Assert.All(log, e => Assert.True(DateTimeOffset.TryParse(e.Utc, out _)));
+    }
 }

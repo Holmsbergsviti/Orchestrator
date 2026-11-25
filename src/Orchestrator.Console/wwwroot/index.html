@@ -248,6 +248,22 @@
       <div class="empty" id="noMachines" hidden>No machines have reported yet.</div>
     </div>
 
+    <div class="card" id="activityCard">
+      <h2>Activity
+        <select id="actFilter" title="Show one machine only" style="margin-left:10px; font-size:12px; padding:3px 6px"></select>
+        <button type="button" id="actReload" style="margin-left:6px; font-size:12px; padding:4px 10px">Refresh</button>
+      </h2>
+      <div class="muted" style="margin:-4px 0 10px; font-size:12px">What you have asked machines to do from this console, read back from the control repo's history (each entry is a signed commit). It shows what you requested; what a PC then did is in that PC's own log.</div>
+      <div class="scroll">
+        <table id="activity">
+          <thead><tr><th>When</th><th>What</th><th>Machine</th><th>Commit</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty" id="noActivity" hidden>Nothing yet.</div>
+      <div style="margin-top:8px"><button type="button" id="actMore" hidden style="font-size:12px; padding:4px 10px">Show more</button></div>
+    </div>
+
     <div class="card">
       <h2>Targeting</h2>
       <div class="toolbar">
@@ -343,6 +359,7 @@
       const t = $('#toast');
       t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
       setTimeout(() => (t.className = ''), 3200);
+      if (!isErr) scheduleActivityRefresh();   // most toasts are "I just did something"; the log should show it
     }
 
     // Which build a machine is actually running, and whether that's the published one.
@@ -386,6 +403,66 @@
         t.toLowerCase() === m.hostname.toLowerCase());
     }
 
+    // ---- Activity log: what the operator has done (the control repo's history, read back) ---------
+    let activity = [];            // newest first, as the server sent it
+    let activityLimit = 50;       // how many the "Show more" button has asked for
+    let activityTimer = null;
+
+    const ACTIONS = {
+      shutdown: 'Shut down', restart: 'Restart', uninstall: 'Uninstall agent',
+      remote: 'Remote session requested', screenshot: 'Screenshot requested', wake: 'Wake',
+      'run-now': 'Run now', 'add-program': 'Added program', 'delete-program': 'Deleted program',
+      save: 'Saved targeting / labels', removed: 'Removed from the list'
+    };
+
+    function scheduleActivityRefresh() {
+      clearTimeout(activityTimer);
+      activityTimer = setTimeout(loadActivity, 2000);   // debounced: a burst of actions is one fetch
+    }
+
+    async function loadActivity() {
+      try {
+        const r = await fetch('/api/activity?limit=300');
+        if (!r.ok) return;                 // the log is a convenience; never block the page on it
+        activity = await r.json();
+      } catch (e) { return; }
+      renderActivity();
+    }
+
+    function machineName(id, detail) {
+      const m = (state?.machines || []).find(x => x.machineId.toLowerCase() === (id || '').toLowerCase());
+      return m ? (m.label || m.hostname) : (detail || id);   // a removed machine is no longer in the list
+    }
+
+    function renderActivity() {
+      // Machine filter: everything the log mentions, plus the machines currently listed.
+      const sel = $('#actFilter'); const keep = sel.value;
+      const ids = new Map();
+      for (const m of state?.machines || []) ids.set(m.machineId.toLowerCase(), machineName(m.machineId));
+      for (const a of activity) for (const id of a.machineIds) if (!ids.has(id.toLowerCase())) ids.set(id.toLowerCase(), machineName(id, a.detail));
+      sel.innerHTML = '';
+      sel.append(el('option', { value: '', textContent: 'All machines' }));
+      for (const [id, name] of ids) sel.append(el('option', { value: id, textContent: name }));
+      sel.value = ids.has(keep) ? keep : '';
+
+      const shown = activity.filter(a => !sel.value || a.machineIds.some(i => i.toLowerCase() === sel.value));
+      const tb = $('#activity tbody'); tb.innerHTML = '';
+      $('#noActivity').hidden = shown.length > 0;
+      for (const a of shown.slice(0, activityLimit)) {
+        const when = new Date(a.utc);
+        const who = a.machineIds.length
+          ? a.machineIds.map(i => machineName(i, a.detail)).join(', ')
+          : (a.detail || '');   // program-level entries name the program instead
+        tb.append(el('tr', {}, [
+          el('td', { title: when.toISOString(), textContent: isNaN(when) ? a.utc : when.toLocaleString() }),
+          el('td', { textContent: ACTIONS[a.kind] || a.kind }),
+          el('td', { textContent: who }),
+          el('td', { className: 'muted', textContent: a.commit })
+        ]));
+      }
+      $('#actMore').hidden = shown.length <= activityLimit;
+    }
+
     async function load() {
       $('#save').disabled = true; dirty = false; renderUpdate();
       let data;
@@ -415,6 +492,7 @@
       state.labelEdits = {};
 
       render();
+      loadActivity();
     }
 
     function render() {
@@ -761,6 +839,14 @@
     // Start a live remote-control session: queues the request, then opens the viewer tab
     // (it shows "waiting for the agent" until that machine's next sync picks the request up).
     async function startRemoteSession(m) {
+      // Open the viewer window NOW, inside the click. Setting up a session takes several seconds (it is
+      // published through GitHub), and a browser only lets a click open a window for a few seconds
+      // afterwards: opened after the wait, it is silently blocked and the operator sees nothing happen.
+      const viewer = window.open('about:blank', '_blank');
+      if (viewer) {
+        try { viewer.document.title = 'Remote session'; viewer.document.body.style.cssText = 'background:#050a06;color:#6ee7a0;font:14px monospace;padding:24px';
+              viewer.document.body.textContent = 'Setting up the session… this window fills in when it is ready.'; } catch (e) { /* cross-origin about:blank quirks: harmless */ }
+      }
       try {
         const r = await fetch('/api/remote-session', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
@@ -771,11 +857,27 @@
             ? (res.message || 'Session already open — reopening its viewer')
             : (res.commit ? `Remote session requested · ${res.commit}` : (res.message || 'Remote session requested')));
           const label = encodeURIComponent(m.label || m.hostname);
-          window.open(`/remote.html?sessionId=${encodeURIComponent(res.sessionId)}&machineId=${encodeURIComponent(m.machineId)}&label=${label}`, '_blank');
+          const url = `/remote.html?sessionId=${encodeURIComponent(res.sessionId)}&machineId=${encodeURIComponent(m.machineId)}&label=${label}`;
+          if (viewer && !viewer.closed) viewer.location.href = url;
+          else showViewerLink(m, url);   // the window was blocked or closed: offer a link a click can open
         } else {
+          if (viewer && !viewer.closed) viewer.close();
           toast('Remote session failed: ' + (res.message || res.detail || 'unknown error'), true);
         }
-      } catch (e) { toast('Remote session failed: ' + e.message, true); }
+      } catch (e) {
+        if (viewer && !viewer.closed) viewer.close();
+        toast('Remote session failed: ' + e.message, true);
+      }
+    }
+
+    // A browser that refuses to open the viewer window still gets a way in: a link, which a click may open.
+    function showViewerLink(m, url) {
+      const w = $('#warnings');
+      w.append(el('div', { className: 'warn' }, [
+        `Session for ${m.label || m.hostname} is ready, but your browser blocked the viewer window. `,
+        el('a', { href: url, target: '_blank', textContent: 'Open the viewer', style: 'color:inherit; text-decoration:underline' }),
+        ' (or allow popups for this page).'
+      ]));
     }
 
     async function signNow(unsigned) {
@@ -965,6 +1067,9 @@
       load();
     };
     $('#save').onclick = save;
+    $('#actFilter').onchange = () => { activityLimit = 50; renderActivity(); };
+    $('#actReload').onclick = () => loadActivity();
+    $('#actMore').onclick = () => { activityLimit += 50; renderActivity(); };
     $('#wakeAll').onclick = () => {
       const ids = (state?.machines || []).filter(m => m.mac).map(m => m.machineId);
       if (ids.length === 0) { toast('No machines with a known MAC', true); return; }

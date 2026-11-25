@@ -312,6 +312,19 @@ public sealed class ControlRepo
     public bool RepoIsValid() => _git.IsValid();
     public string RepoPath => _opt.ControlRepoPath;
 
+    /// <summary>What the operator has done from this console, newest first: the "console: ..." commits on
+    /// main and on the fleet-state branch (where "remove machine" is recorded). See ActivityLog.</summary>
+    public async Task<List<ActivityEntry>> ActivityAsync(int limit, CancellationToken ct)
+    {
+        try { await _git.FetchAsync(_opt.Remote, ct); }
+        catch (GitException) { /* offline: show what this clone already has */ }
+        var entries = new List<ActivityEntry>();
+        foreach (var branch in new[] { MainRef, FleetRef })
+            foreach (var (hash, utc, subject) in _git.Log(branch, 600))
+                if (ActivityLog.Parse(hash, utc, subject) is { } e) entries.Add(e);
+        return ActivityLog.Merge(entries, limit);
+    }
+
     private string MainRef => $"{_opt.Remote}/{_opt.MainBranch}";
     private string FleetRef => $"{_opt.Remote}/{_opt.FleetStateBranch}";
 
@@ -749,7 +762,7 @@ public sealed class ControlRepo
         try
         {
             var sha = await CommitSignedAsync(
-                $"console: wake {wake.Count} machine(s) ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
+                $"console: wake {wake.Count} machine(s): {string.Join(',', wake.Select(w => w!["machineId"]!.GetValue<string>()))} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
             var msg = $"Wake queued for {wake.Count} machine(s) — the waker sends the packets on its next sync.";
             if (missing > 0) msg += $" ({missing} skipped: no MAC reported yet.)";
             return new SaveResult { Ok = true, Message = msg, Commit = sha };

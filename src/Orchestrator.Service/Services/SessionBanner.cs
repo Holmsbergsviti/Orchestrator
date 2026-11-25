@@ -37,6 +37,7 @@ internal sealed class SessionBanner : IDisposable
     private const int TRANSPARENT_BKMODE = 1;
     private const uint WS_POPUP = 0x80000000;
     private const uint WS_VISIBLE = 0x10000000;
+    private const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;   // shown on the monitor only, absent from any capture
     private const uint WS_EX_TOPMOST = 0x00000008;
     private const uint WS_EX_TOOLWINDOW = 0x00000080;   // no taskbar/alt-tab entry
     private const int SM_CXSCREEN = 0;
@@ -105,6 +106,13 @@ internal sealed class SessionBanner : IDisposable
             throw new InvalidOperationException($"CreateWindowExW failed (error {Marshal.GetLastWin32Error()})");
         }
 
+        // Visible on the PC, but left out of what the screen capture sees: otherwise the operator's own
+        // view has a banner stuck over the top-right corner of the very screen they came to look at.
+        // The person at the machine still sees it and can still end the session by clicking it; only
+        // the picture sent to the operator omits it. Needs Windows 10 2004 or newer; on an older
+        // Windows the call fails and the banner simply stays in the picture, as before.
+        _excludedFromCapture = SetWindowDisplayAffinity(_hwnd, WDA_EXCLUDEFROMCAPTURE);
+
         ShowWindow(_hwnd, SW_SHOW);
         UpdateWindow(_hwnd);
 
@@ -118,6 +126,10 @@ internal sealed class SessionBanner : IDisposable
 
     /// <summary>Ask the banner to close from another thread. Safe to call multiple times, and
     /// safe to call before the window exists yet (a no-op in that case).</summary>
+    /// <summary>True when the banner is hidden from screen captures (see where the window is created).</summary>
+    public bool ExcludedFromCapture => _excludedFromCapture;
+    private volatile bool _excludedFromCapture;
+
     public void RequestClose()
     {
         if (_hwnd != IntPtr.Zero) PostMessageW(_hwnd, WM_APP_END, IntPtr.Zero, IntPtr.Zero);
@@ -232,6 +244,7 @@ internal sealed class SessionBanner : IDisposable
     private static extern IntPtr CreateWindowExW(uint dwExStyle, string lpClassName, string lpWindowName, uint dwStyle,
         int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
 
+    [DllImport("user32.dll")] private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool UpdateWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);

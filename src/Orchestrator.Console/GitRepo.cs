@@ -34,6 +34,17 @@ public sealed class GitRepo(string repoPath)
     public string? LastChange(string refSpec, string path)
         => TryRun(out var o, out _, "log", "-1", "--format=%an, %ar", refSpec, "--", path) && !string.IsNullOrWhiteSpace(o) ? o.Trim() : null;
 
+    /// <summary>The newest commits on <paramref name="refSpec"/> as (hash, ISO commit time, subject), newest first.
+    /// Empty when the ref doesn't exist.</summary>
+    public IReadOnlyList<(string Hash, string Utc, string Subject)> Log(string refSpec, int max)
+    {
+        if (!TryRun(out var o, out _, "log", refSpec, "-n", Math.Clamp(max, 1, 2000).ToString(), "--format=%H%x1f%cI%x1f%s")) return Array.Empty<(string, string, string)>();
+        return o.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Split('\u001f'))
+                .Where(f => f.Length == 3)
+                .Select(f => (f[0], f[1], f[2])).ToList();
+    }
+
     /// <summary>Download the latest refs from the remote (no working-tree changes).</summary>
     public Task FetchAsync(string remote, CancellationToken ct)
         => RunAsync(ct, "fetch", remote, "--prune", "--quiet");
