@@ -147,6 +147,20 @@ Targets are written as **hostnames**, so `manifest.json` stays human-readable
 manifest stores the machine's real hostname. (Note: if two machines share a hostname, a
 hostname target hits both — rename one to disambiguate.)
 
+## Activity log
+
+The **Activity** card under *Machines* lists what you have done from the console, newest first: shut down,
+restart, uninstall, wake, screenshot and remote-session requests, run-now, program add/delete, saved
+targeting and removed machines. Pick a machine in the drop-down to see only its history; **Show more**
+reaches further back.
+
+It needs nothing extra: every action is already a signed commit in the control repo (`console: restart
+<machine> (...)`), and the card reads that history back, so it is exact, keeps the same timestamps GitHub
+has, and survives moving or reinstalling the console. It records what you **asked for**. Whether a PC
+carried it out, and whether a live session actually connected, is in that PC's own log
+(`<install folder>\logs`, `remote-sessions.json` for live sessions). Actions made before this card
+existed show too, except wakes, which didn't name their machines then.
+
 ## Removing a machine
 **Remove…** (bottom of a machine's Power buttons) asks which of two things you mean:
 - **Uninstall the agent from this PC and remove it.** Sends a signed `uninstall` command. On its next
