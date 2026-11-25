@@ -9,9 +9,12 @@
 //   path, never the operator's pages or API). That name — not an IP — is what the signed relay
 //   hint tells a PC to dial, and it changes every time the tunnel starts.
 //
-//   The tunnel carries the screen frames, so Cloudflare can see them in transit (they sit behind
-//   Cloudflare's own HTTPS certificate, which is why no thumbprint is pinned for it). The relay's
-//   per-session token and the PC's signature still decide who is let in.
+//   Cloudflare terminates the tunnel's HTTPS (its own public certificate, which is why no
+//   thumbprint is pinned), so it could read whatever passes. Nothing readable does: every session
+//   that goes through the tunnel is sealed end to end between the PC and this console (see
+//   RelayCipher), with a one-off key that reaches the PC through the signed hint on GitHub. What
+//   Cloudflare sees is that a session exists, when, and how many bytes. The relay's per-session
+//   token and the PC's signature still decide who is let in.
 //
 //   If cloudflared isn't installed or dies, the console keeps working: there is simply no tunnel
 //   address to advertise and PCs fall back to the console's LAN name (see RelayAdvert).

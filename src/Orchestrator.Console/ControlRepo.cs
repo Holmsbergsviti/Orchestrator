@@ -292,7 +292,6 @@ public sealed class ControlRepo
     private readonly ControlSigning _signing;
     private readonly RelayAdvert? _advert;   // the console's own LAN name; null = nothing to say
     private readonly TunnelService? _tunnel; // when it is up, THIS is what PCs are told to dial (it works from any network)
-    private RelayAdvert? CurrentAdvert => _tunnel?.Advert ?? _advert;
     private readonly ILogger<ControlRepo> _log;
 
     /// <summary>The files agents refuse unless signed (agent.json too, but CI signs that one).</summary>
@@ -863,9 +862,10 @@ public sealed class ControlRepo
         // Tell the machine where to dial BEFORE the request becomes visible, so an agent that sees
         // the request can always find the address. It goes on a throwaway branch, never main.
         var hinted = false;
+        string? e2eKey = null;   // set when the address goes through the tunnel: then the stream is encrypted end to end
         try
         {
-            hinted = await PublishRelayHintAsync(machineId, sessionId, ct);
+            (hinted, e2eKey) = await PublishRelayHintAsync(machineId, sessionId, ct);
         }
         catch (GitException ex)
         {
@@ -882,7 +882,7 @@ public sealed class ControlRepo
             // would leave it counting down long after the agent discarded the request as stale.
             // The grace covers the agent connecting AFTER it picks the request up (its one-time
             // task fires ~15s later, then has to reach the relay).
-            _relay.RegisterPending(sessionId, machineId, agentKey, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace);
+            _relay.RegisterPending(sessionId, machineId, agentKey, validFor: expiresUtc - DateTimeOffset.UtcNow + ConnectGrace, e2eKey: e2eKey);
             return new RemoteSessionResult
             {
                 Ok = true,
@@ -918,24 +918,30 @@ public sealed class ControlRepo
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _hintIds = new();   // sessions we published
     private volatile bool _hintMayBeLeftOver;   // true after a console restart: the branch might hold sessions we forgot
 
-    /// <summary>Add this machine's session to the hint. Returns false when there is nothing to publish
+    /// <summary>Add this machine's session to the hint. Hinted is false when there is nothing to publish
     /// (no address to advertise, or no key to sign with): the PC then uses its installed address.
-    /// Must be called with the write gate held.</summary>
-    private async Task<bool> PublishRelayHintAsync(string machineId, string sessionId, CancellationToken ct)
+    /// Key is the session's encryption key, set only when the PC is sent through the tunnel (whoever
+    /// carries that traffic must not be able to read it); the hint is signed, so the key reaches the PC
+    /// intact and secret, over GitHub rather than over the tunnel. Must be called with the write gate held.</summary>
+    private async Task<(bool Hinted, string? Key)> PublishRelayHintAsync(string machineId, string sessionId, CancellationToken ct)
     {
-        var advert = CurrentAdvert;   // read once: the tunnel can drop between two reads
-        if (advert is null || !_signing.HasKey) return false;
+        var tunnel = _tunnel?.Advert;   // read once: the tunnel can drop between two reads
+        var advert = tunnel ?? _advert;
+        if (advert is null || !_signing.HasKey) return (false, null);
+        var key = tunnel is null ? null : RelayCipher.NewKey();
         await RewriteRelayHintAsync(sessions =>
         {
-            sessions[machineId] = new JsonObject
+            var entry = new JsonObject
             {
                 ["id"] = sessionId,
                 ["relayUrl"] = advert.Url,
                 ["relayCertThumbprint"] = advert.Thumbprint
             };
+            if (key is not null) entry["relayKey"] = key;
+            sessions[machineId] = entry;
         }, ct, alsoKeep: sessionId);   // the relay only learns of this session once its request is on GitHub
         _hintIds[sessionId] = 0;
-        return true;
+        return (true, key);
     }
 
     /// <summary>Read the hint as it is on GitHub, let <paramref name="edit"/> change its sessions,

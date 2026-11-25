@@ -302,6 +302,10 @@ public sealed class RelayHintTests : IDisposable
         var file = JsonSerializer.Deserialize<RelayHintFile>(content)!;
         Assert.Equal(("wss://quiet-fox-1234.trycloudflare.com", ""), RelayHint.Pick(file, "m1", result.SessionId!));
         Assert.DoesNotContain("operator-mac", Encoding.UTF8.GetString(content));   // the LAN name isn't mentioned at all
+        // Through the tunnel the stream is sealed end to end: the key reaches the PC in this signed hint
+        // (over GitHub, never over the tunnel), and is fresh for every session.
+        var key = RelayHint.PickKey(file, "m1", result.SessionId!);
+        Assert.True(Orchestrator.Service.Services.RelayCipher.IsWellFormedKey(key));
     }
 
     [Fact]
@@ -315,6 +319,9 @@ public sealed class RelayHintTests : IDisposable
 
         var result = await console.StartRemoteSessionAsync("m1", default);
         var content = Encoding.UTF8.GetBytes(OnGitHub("show", "relay-hint:relay-hint.json") + "\n");
-        Assert.Equal(("wss://operator-mac.local:5080", Thumb), RelayHint.Pick(JsonSerializer.Deserialize<RelayHintFile>(content)!, "m1", result.SessionId!));
+        var lan = JsonSerializer.Deserialize<RelayHintFile>(content)!;
+        Assert.Equal(("wss://operator-mac.local:5080", Thumb), RelayHint.Pick(lan, "m1", result.SessionId!));
+        Assert.Null(RelayHint.PickKey(lan, "m1", result.SessionId!));   // on your own network nothing is encrypted, as before
+        Assert.DoesNotContain("relayKey", Encoding.UTF8.GetString(content));
     }
 }

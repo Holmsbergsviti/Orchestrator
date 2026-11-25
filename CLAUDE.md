@@ -99,6 +99,11 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   up. The tunnel targets a **separate loopback listener** (`Console:TunnelPort`), and a guard middleware that runs
   before auth lets that port reach `/relay/agent` and nothing else: via cloudflared every request looks local, and a
   console without an `AccessToken` would otherwise serve the whole UI to the internet. Keep that guard first.
+  Sessions through the tunnel are **sealed end to end** (`RelayCipher`, AES-256-GCM, per-direction HKDF keys, counter
+  per message): the console makes a per-session key, ships it in the signed hint (`relayKey`, GitHub — never the
+  tunnel), registers it with `RelayHub`, and `RelayEncryptedPump` opens/seals at the console edge (the browser leg is
+  localhost). A session with a key accepts only sealed messages; there is no plaintext fall-back. `RelayCipher` exists
+  in both projects and a test seals with one and opens with the other — keep them in step. LAN sessions carry no key.
 - **Where the agent dials comes from a signed, throwaway hint** (`relay-hint` branch: one parentless
   commit with `relay-hint.json` + `.sig`, force-pushed by `ControlRepo.PublishRelayHintAsync` before the
   session request lands on main and deleted by `RelayHintJanitor` once `RelayHub` no longer knows the

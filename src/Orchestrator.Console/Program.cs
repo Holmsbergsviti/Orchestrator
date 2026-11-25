@@ -448,7 +448,8 @@ System.Console.WriteLine("Remote control:");
 if (opt.Tunnel)
     System.Console.WriteLine($"  Tunnel: starting '{opt.TunnelCommand}' (free Cloudflare quick tunnel) so PCs on any network can reach this console.\n" +
                              "  Your IP is never shared; the address PCs dial is a random trycloudflare.com name that changes each start.\n" +
-                             "  Only the agent relay path is reachable through it. Watch the log for 'tunnel: up'. Cloudflare can see the screen stream in transit.");
+                             "  Only the agent relay path is reachable through it, and the stream is encrypted end to end so Cloudflare only\n" +
+                             "  carries scrambled bytes. Watch the log for 'tunnel: up'. PCs need an up-to-date agent for this.");
 if (relayAdvert is not null)
     System.Console.WriteLine($"  {(opt.Tunnel ? "If the tunnel is down, " : "")}When you press Remote, PCs are told to dial {relayAdvert.Url} (their agent must be up to date).\n" +
                              "  That address is published on a throwaway branch only while the session can start, then deleted.\n" +

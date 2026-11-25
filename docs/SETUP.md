@@ -184,9 +184,15 @@ on the same network (or VPN) with no reinstall, and you never type an address an
   - Only the **agent relay path** is reachable through the tunnel: it points at its own loopback
     listener (`Console:TunnelPort`) that answers 404 to everything else, so your pages and API are never
     on the internet. A session still needs its single-use token and the PC's signature.
-  - The screen stream passes **through Cloudflare** (inside HTTPS, but Cloudflare terminates it), so
-    they could see it in transit. If that is not acceptable, use a VPN (Tailscale) with
-    `Console:RelayAdvertiseUrl` instead.
+  - **The stream is encrypted end to end**, so Cloudflare only carries scrambled bytes. For each session
+    that goes through the tunnel the console makes a one-off 256-bit key and puts it in the signed hint
+    (so it reaches the PC over GitHub, never over the tunnel); screen frames and your input are sealed
+    with AES-256-GCM, each message numbered so it can't be altered, replayed or reordered. Cloudflare
+    still sees that a session exists, when, and how many bytes (and your Mac's address, as the tunnel's
+    origin — the PCs never do). A PC whose agent predates this can't take part: the console ends the session and the
+    viewer says the PC's messages couldn't be decrypted. It fixes itself when the agent self-updates. No forward secrecy: someone who later read the
+    hint commit from GitHub *and* had recorded the traffic could decrypt it, which is why the hint branch
+    is deleted the moment the session ends.
   - The console logs `tunnel: up` once it works. If `cloudflared` is missing or the tunnel is down,
     PCs are told the console's own name as before.
 - GitHub itself keeps unreachable commits for a while after a branch is deleted; they are not

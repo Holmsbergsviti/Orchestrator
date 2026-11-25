@@ -168,7 +168,7 @@ static int RunRemoteSession(string[] args)
     var id = args.Length > 1 ? args[1] : null;
     if (string.IsNullOrWhiteSpace(id))
     {
-        Console.Error.WriteLine("usage: remote-session <sessionId> [proof|-] [relayUrl] [relayThumbprint|-]");
+        Console.Error.WriteLine("usage: remote-session <sessionId> [proof|-] [relayUrl] [relayThumbprint|-] [relayKey]");
         return 2;
     }
     try
@@ -188,7 +188,15 @@ static int RunRemoteSession(string[] args)
         // Re-checked here: this process is started from a command line, whoever wrote it.
         var relayUrl = args.Length > 3 && RelayHint.IsWellFormedUrl(args[3]) ? args[3] : null;
         var relayThumb = args.Length > 4 && args[4] != "-" && RelayHint.IsWellFormedThumbprint(args[4]) ? args[4] : null;
-        return session.RunAsync(id, proof, relayUrl, relayThumb, CancellationToken.None).GetAwaiter().GetResult();
+        // The end-to-end key, when the session is encrypted. A key that is present but malformed
+        // stops the session instead of being ignored, which would mean sending the screen in the clear.
+        string? relayKey = null;
+        if (args.Length > 5)
+        {
+            if (!RelayCipher.IsWellFormedKey(args[5])) { Console.Error.WriteLine("remote-session: malformed relay key"); return 2; }
+            relayKey = args[5];
+        }
+        return session.RunAsync(id, proof, relayUrl, relayThumb, CancellationToken.None, relayKey).GetAwaiter().GetResult();
     }
     catch (Exception ex)
     {
