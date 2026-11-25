@@ -115,7 +115,9 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   - A machine whose agent predates signing says so and can't take sessions until it updates.
   - A red **"Remote control active — click to end"** banner appears on the target for the whole
     session. It can't be turned off, and clicking it ends the session immediately — that
-    override always wins over the console.
+    override always wins over the console. It is **left out of the picture you receive**, so it
+    never covers the screen you are viewing (Windows 10 2004 or newer; on an older Windows it
+    stays in the picture, and the agent log says so).
   - Sessions run in **grants** of `RemoteSessionMaxMinutes` (default 30). The viewer shows the
     time left, and a **Renew** button appears in the last five minutes. Nothing ever extends
     itself — renewing is always a click, and the machine's banner shows the new end time so the
