@@ -839,6 +839,14 @@
     // Start a live remote-control session: queues the request, then opens the viewer tab
     // (it shows "waiting for the agent" until that machine's next sync picks the request up).
     async function startRemoteSession(m) {
+      // Open the viewer window NOW, inside the click. Setting up a session takes several seconds (it is
+      // published through GitHub), and a browser only lets a click open a window for a few seconds
+      // afterwards: opened after the wait, it is silently blocked and the operator sees nothing happen.
+      const viewer = window.open('about:blank', '_blank');
+      if (viewer) {
+        try { viewer.document.title = 'Remote session'; viewer.document.body.style.cssText = 'background:#050a06;color:#6ee7a0;font:14px monospace;padding:24px';
+              viewer.document.body.textContent = 'Setting up the session… this window fills in when it is ready.'; } catch (e) { /* cross-origin about:blank quirks: harmless */ }
+      }
       try {
         const r = await fetch('/api/remote-session', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
@@ -849,11 +857,27 @@
             ? (res.message || 'Session already open — reopening its viewer')
             : (res.commit ? `Remote session requested · ${res.commit}` : (res.message || 'Remote session requested')));
           const label = encodeURIComponent(m.label || m.hostname);
-          window.open(`/remote.html?sessionId=${encodeURIComponent(res.sessionId)}&machineId=${encodeURIComponent(m.machineId)}&label=${label}`, '_blank');
+          const url = `/remote.html?sessionId=${encodeURIComponent(res.sessionId)}&machineId=${encodeURIComponent(m.machineId)}&label=${label}`;
+          if (viewer && !viewer.closed) viewer.location.href = url;
+          else showViewerLink(m, url);   // the window was blocked or closed: offer a link a click can open
         } else {
+          if (viewer && !viewer.closed) viewer.close();
           toast('Remote session failed: ' + (res.message || res.detail || 'unknown error'), true);
         }
-      } catch (e) { toast('Remote session failed: ' + e.message, true); }
+      } catch (e) {
+        if (viewer && !viewer.closed) viewer.close();
+        toast('Remote session failed: ' + e.message, true);
+      }
+    }
+
+    // A browser that refuses to open the viewer window still gets a way in: a link, which a click may open.
+    function showViewerLink(m, url) {
+      const w = $('#warnings');
+      w.append(el('div', { className: 'warn' }, [
+        `Session for ${m.label || m.hostname} is ready, but your browser blocked the viewer window. `,
+        el('a', { href: url, target: '_blank', textContent: 'Open the viewer', style: 'color:inherit; text-decoration:underline' }),
+        ' (or allow popups for this page).'
+      ]));
     }
 
     async function signNow(unsigned) {
