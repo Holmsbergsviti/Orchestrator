@@ -358,14 +358,14 @@ app.MapGet("/api/screenshot/{machineId}", async (string machineId, ControlRepo r
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }
 });
 
-// A machine's agent log: the newest part of it, uploaded with each heartbeat (about every 30 minutes).
+// A machine's agent log: the newest part of it, uploaded every LogUploadMinutes (default 2).
 app.MapGet("/api/log/{machineId}", async (string machineId, ControlRepo r, CancellationToken ct) =>
 {
     try
     {
         var text = await r.GetMachineLogAsync(machineId, ct);
         return text is null
-            ? Results.Text("No log uploaded by this machine yet. It arrives with the machine's next heartbeat (needs the build that uploads logs).", "text/plain", statusCode: 404)
+            ? Results.Text("No log uploaded by this machine yet. It arrives within a few minutes (needs the build that uploads logs).", "text/plain", statusCode: 404)
             : Results.Text(text, "text/plain; charset=utf-8");
     }
     catch (GitException ex) { return Results.Problem(ex.Message, statusCode: 502, title: "git error"); }

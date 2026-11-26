@@ -108,6 +108,7 @@ public sealed class FleetReporter : IFleetReporter
             if (!ShouldPush(current, last, TimeSpan.FromMinutes(current.HeartbeatMaxIntervalMinutes), DateTimeOffset.UtcNow))
             {
                 _log.LogDebug("Heartbeat unchanged — skipping commit");
+                await UploadLogTailAsync(machine, _config.FleetStateBranch, ct);   // the log has its own, shorter schedule
                 return;
             }
 
@@ -127,7 +128,7 @@ public sealed class FleetReporter : IFleetReporter
             SaveLastHeartbeat(current);   // remember what we pushed so next cycle can diff
             _log.LogInformation("Reported heartbeat to {Branch}:{Path}", branch, path);
 
-            await UploadLogTailAsync(machine, branch, ct);   // the log rides along with the heartbeat, never instead of it
+            await UploadLogTailAsync(machine, branch, ct);   // sent after the heartbeat, never instead of it
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -143,12 +144,19 @@ public sealed class FleetReporter : IFleetReporter
         }
     }
 
+    private DateTimeOffset _lastLogUpload = DateTimeOffset.MinValue;   // in memory only: a restart uploads right away
+
+    /// <summary>Is a log upload due? Once every <paramref name="minutes"/>, with a little slack because a
+    /// sync cycle never lands exactly on the interval (without it every second cycle would be skipped).</summary>
+    public static bool LogUploadDue(DateTimeOffset last, DateTimeOffset now, int minutes)
+        => now - last >= TimeSpan.FromMinutes(Math.Max(1, minutes)) - TimeSpan.FromSeconds(30);
+
     /// <summary>Commit the newest part of this agent's log to logs/&lt;machineId&gt;.txt on the fleet-state
-    /// branch. Sent only together with a heartbeat (so about every 30 minutes). Best-effort: a failure
-    /// here is logged and ignored, the heartbeat has already gone out.</summary>
+    /// branch, at most every <c>LogUploadMinutes</c>. Best-effort: a failure here is logged and ignored.</summary>
     private async Task UploadLogTailAsync(MachineConfig machine, string branch, CancellationToken ct)
     {
         if (!_config.UploadLogs) return;
+        if (!LogUploadDue(_lastLogUpload, DateTimeOffset.UtcNow, _config.LogUploadMinutes)) return;
         try
         {
             var text = ReadLogTail(_config.LogsPath);
@@ -157,6 +165,7 @@ public sealed class FleetReporter : IFleetReporter
             var sha = await _github.GetFileShaAsync(path, branch, ct);
             await _github.PutFileAsync(path, Encoding.UTF8.GetBytes(text), branch,
                 $"log: {machine.Hostname} ({machine.MachineId}) {DateTimeOffset.UtcNow:O}", sha, ct);
+            _lastLogUpload = DateTimeOffset.UtcNow;
             _log.LogInformation("Uploaded log tail to {Branch}:{Path}", branch, path);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }

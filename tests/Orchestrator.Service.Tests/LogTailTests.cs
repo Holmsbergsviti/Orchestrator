@@ -52,6 +52,17 @@ public class LogTailTests : IDisposable
     }
 
     [Fact]
+    public void LogUploadDue_RespectsTheInterval_WithSlackForSyncJitter()
+    {
+        var now = DateTimeOffset.UtcNow;
+        Assert.True(FleetReporter.LogUploadDue(DateTimeOffset.MinValue, now, 2));      // never uploaded
+        Assert.True(FleetReporter.LogUploadDue(now.AddSeconds(-125), now, 2));         // a normal 2-minute cycle
+        Assert.True(FleetReporter.LogUploadDue(now.AddSeconds(-95), now, 2));          // a cycle that came a bit early
+        Assert.False(FleetReporter.LogUploadDue(now.AddSeconds(-60), now, 2));         // too soon
+        Assert.False(FleetReporter.LogUploadDue(now.AddMinutes(-5), now, 30));
+    }
+
+    [Fact]
     public void FileStillOpenForWriting_CanBeRead()
     {
         var path = Path.Combine(_dir, "log-1.txt");
