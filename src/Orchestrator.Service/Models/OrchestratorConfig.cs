@@ -50,6 +50,7 @@ public sealed class OrchestratorConfig
 
     /// <summary>Whether this machine reports a heartbeat back to GitHub. Needs a token with write access.</summary>
     public bool ReportState { get; set; } = true;               // true = commit state/<machineId>.json each time it changes
+    public bool UploadLogs { get; set; } = true;                // true = also commit the newest part of this agent's log (logs/<machineId>.txt) with each heartbeat, so the console can show it
 
     /// <summary>Branch the heartbeat files are committed to (kept off the main branch).</summary>
     public string FleetStateBranch { get; set; } = OrchestratorDefaults.Instance.FleetStateBranch;   // where heartbeats live (from defaults.json)

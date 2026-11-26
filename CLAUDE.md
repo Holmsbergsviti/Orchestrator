@@ -194,6 +194,10 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
   `ActivityLog.Parse` understands** (add a case and a test), or it silently won't show up. Housekeeping commits
   (relay hint, signing) are deliberately skipped.
 
+- **Agent log upload.** With each heartbeat push (not on every sync) `FleetReporter` also commits the tail of the
+  newest `logs\log-*.txt` to `logs/<machineId>.txt` on `fleet-state` (`UploadLogs`, default on); the console serves it at
+  `GET /api/log/{machineId}` (the "Log" link). Forget removes it too.
+
 - **Removing a machine.** "Forget" (`ControlRepo.ForgetMachineAsync`) deletes `state/<id>.json` and
   `screenshots/<id>` from the `fleet-state` branch via a scratch clone (`GitRepo.RemovePathsOnRemoteBranchAsync`;
   the branch is never checked out here, and a lost push race restarts from a fresh clone). "Uninstall" is a

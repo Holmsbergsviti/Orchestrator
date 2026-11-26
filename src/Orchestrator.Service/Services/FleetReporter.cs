@@ -126,6 +126,8 @@ public sealed class FleetReporter : IFleetReporter
             await _github.PutFileAsync(path, bytes, branch, message, sha, ct);
             SaveLastHeartbeat(current);   // remember what we pushed so next cycle can diff
             _log.LogInformation("Reported heartbeat to {Branch}:{Path}", branch, path);
+
+            await UploadLogTailAsync(machine, branch, ct);   // the log rides along with the heartbeat, never instead of it
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -139,6 +141,60 @@ public sealed class FleetReporter : IFleetReporter
         {
             _log.LogWarning(ex, "Heartbeat reporting failed (continuing)");   // best-effort — never break the sync
         }
+    }
+
+    /// <summary>Commit the newest part of this agent's log to logs/&lt;machineId&gt;.txt on the fleet-state
+    /// branch. Sent only together with a heartbeat (so about every 30 minutes). Best-effort: a failure
+    /// here is logged and ignored, the heartbeat has already gone out.</summary>
+    private async Task UploadLogTailAsync(MachineConfig machine, string branch, CancellationToken ct)
+    {
+        if (!_config.UploadLogs) return;
+        try
+        {
+            var text = ReadLogTail(_config.LogsPath);
+            if (text is null) return;   // no log file yet
+            var path = $"logs/{machine.MachineId}.txt";
+            var sha = await _github.GetFileShaAsync(path, branch, ct);
+            await _github.PutFileAsync(path, Encoding.UTF8.GetBytes(text), branch,
+                $"log: {machine.Hostname} ({machine.MachineId}) {DateTimeOffset.UtcNow:O}", sha, ct);
+            _log.LogInformation("Uploaded log tail to {Branch}:{Path}", branch, path);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Log upload failed (continuing)");
+        }
+    }
+
+    // How much of the log to send: the last MaxLogLines lines, and never more than MaxLogBytes read from the file.
+    private const int MaxLogLines = 400;
+    private const int MaxLogBytes = 128 * 1024;
+
+    /// <summary>The end of the newest log file in <paramref name="logsDir"/> (log-*.txt), with a one-line
+    /// header saying which file it is. Null when there is no log file. The file is opened shared because
+    /// the service and the interactive verbs are writing to it while we read.</summary>
+    public static string? ReadLogTail(string logsDir, int maxLines = MaxLogLines, int maxBytes = MaxLogBytes)
+    {
+        if (!Directory.Exists(logsDir)) return null;
+        var newest = new DirectoryInfo(logsDir).GetFiles("log-*.txt").OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault();
+        if (newest is null) return null;
+
+        string raw;
+        using (var fs = new FileStream(newest.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            var start = Math.Max(0, fs.Length - maxBytes);
+            fs.Seek(start, SeekOrigin.Begin);
+            using var reader = new StreamReader(fs, Encoding.UTF8);
+            raw = reader.ReadToEnd();
+            if (start > 0)   // we landed mid-line: drop the cut-off first line
+            {
+                var nl = raw.IndexOf('\n');
+                raw = nl >= 0 ? raw[(nl + 1)..] : "";
+            }
+        }
+        var lines = raw.Replace("\r\n", "\n").Split('\n');
+        var tail = lines.Length > maxLines ? lines[^maxLines..] : lines;
+        return $"# {newest.Name} (last {tail.Length} lines, as of {DateTimeOffset.UtcNow:O})\n{string.Join('\n', tail)}";
     }
 
     /// <summary>
