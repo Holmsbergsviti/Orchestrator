@@ -98,4 +98,18 @@
     </AssemblyAttribute>
   </ItemGroup>
 
+  <!-- The operator's PUBLIC data-encryption key, passed in by publish-agent.yml as
+       -p:OrchestratorDataPublicKey=<base64 SPKI> (from the AGENT_DATA_PUBLIC_KEY repo variable —
+       see the console's "data-key" command). A build that has it encrypts every heartbeat, log
+       upload and screenshot to that key before it ever reaches GitHub (see FleetDataEncryption.cs);
+       only the matching PRIVATE key, which never leaves the operator's own computer, can read them
+       back. A build without it — local dev, or CI before the variable is set — sends them in the
+       clear and behaves as before. -->
+  <ItemGroup Condition="'$(OrchestratorDataPublicKey)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>OrchestratorDataPublicKey</_Parameter1>
+      <_Parameter2>$(OrchestratorDataPublicKey)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

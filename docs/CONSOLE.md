@@ -56,6 +56,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
 | `Console:SigningKeyPath` | Your private signing key for [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended) | *(your user profile; made by `-- signing-key`)* |
+| `Console:DataKeyPath` | Your private key for [encrypted fleet data](SETUP.md#3b-encrypt-fleet-data-strongly-recommended) — heartbeats, logs, screenshots | *(your user profile; made by `-- data-key`)* |
 | `Console:RelayAdvertiseUrl` | The `ws(s)://` address PCs should dial for live screen sessions, if not this computer's name + the port in `Urls` | *(worked out)* |
 | `Console:Tunnel` | Start a free Cloudflare quick tunnel so PCs on **other networks** can reach the live screen relay without your address being shared ([details](SETUP.md#b-tell-the-agents-where-it-is)) | `false` |
 | `Console:TunnelCommand` | The `cloudflared` program, as a full path if it isn't on `PATH` | `cloudflared` |

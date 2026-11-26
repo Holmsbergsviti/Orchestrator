@@ -40,6 +40,18 @@ Signed control files are on, and the file isn't signed by your key. The reason s
 - *"has no checksum ... signed mode requires one"* — re-add the program from the console, or
   add `"checksum"` (see ADDING-PROGRAMS.md) and Sign.
 
+## A machine's screenshot/log is missing, or the Machines tab shows a warning about "Fleet data isn't encrypted"
+If the console warns that it has no data key, run `dotnet run --project src/Orchestrator.Console
+-- data-key` once (see SETUP.md, "Encrypt fleet data") — without it, newly-built agents still
+send plain data and this console can still read it, but nothing is being encrypted yet.
+
+If encryption IS set up and a specific machine's screenshot, log, or row just won't load, check
+the console's own log for "is encrypted but didn't open with this console's key" — that means a
+heartbeat/log/screenshot was sealed to a DIFFERENT data key than the one this console now holds
+(you replaced the key file, or two consoles are pointed at the same control repo with different
+keys). It is dropped rather than shown as garbage; nothing is lost on GitHub, it's just unreadable
+until this console has the matching private key.
+
 ## Console: "Your local copy of 'main' and GitHub have each moved on"
 Your clone has a commit that was never pushed, and GitHub has newer ones too (the auto-publish adds a
 commit to the control repo for every agent build). The console never merges for you. In a terminal in the

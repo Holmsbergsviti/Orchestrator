@@ -175,6 +175,21 @@ that matter:
   change, since saving signs the whole file. Keep the three copies of the signed format in step.
 - Heartbeats carry `agentSha256` (the running exe's hash) and the console compares it to
   `agent.json`, so "which machines are on the current build" is answerable.
+- **Encrypted fleet data.** Signing stops a stolen token from *commanding* the fleet; it does
+  nothing about *reading* it. Separately, heartbeats (`state/<id>.json`), uploaded log tails
+  (`logs/<id>.txt`) and screenshots (`screenshots/<id>/*.jpg`) are sealed to the operator's
+  **data** key before an agent ever writes them to GitHub (`FleetDataCipher`: a per-message
+  ephemeral-EC-Diffie-Hellman + HKDF + AES-256-GCM scheme, same shape as `RelayCipher` but with
+  one standing keypair instead of a per-session one). `DataEncryptionKeys` on the console holds
+  the private half (made with the `data-key` verb, stored like the signing key but in a
+  separate file — one key, one job, so neither use can weaken the other); `FleetDataEncryption`
+  in the agent holds only the baked-in public half (`-p:OrchestratorDataPublicKey=<SPKI
+  base64>`, from the `AGENT_DATA_PUBLIC_KEY` repo **variable** — it's public, so unlike
+  `AGENT_SIGNING_KEY` it isn't a secret). A build without the key sends plain data, same as
+  before; the console's `DecryptIfNeeded` recognizes which is which by a magic prefix, so old
+  and new agents coexist on one fleet with no flag day. Losing the data key only means old
+  uploads made to it are unrecoverable — nothing else in the fleet depends on it, unlike losing
+  the signing key.
 
 **The exe is `WinExe`, not `Exe`.** Four of its five modes run with no user watching, and a
 console subsystem gave the screenshot/remote-session verbs a visible terminal window in the

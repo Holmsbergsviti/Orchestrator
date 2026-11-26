@@ -28,6 +28,7 @@ public sealed class ScreenshotService : IScreenshotService
     private readonly IScreenCaptureService _capture;
     private readonly IGitHubClient _github;
     private readonly IConfigService _configService;
+    private readonly IFleetDataEncryption _dataEncryption;   // seals the image for the console only
     private readonly ILogger<ScreenshotService> _log;
     private readonly OrchestratorConfig _config;
 
@@ -35,11 +36,13 @@ public sealed class ScreenshotService : IScreenshotService
         IScreenCaptureService capture,
         IGitHubClient github,
         IConfigService configService,
+        IFleetDataEncryption dataEncryption,
         ILogger<ScreenshotService> log)
     {
         _capture = capture;
         _github = github;
         _configService = configService;
+        _dataEncryption = dataEncryption;
         _config = configService.Config;
         _log = log;
     }
@@ -71,7 +74,7 @@ public sealed class ScreenshotService : IScreenshotService
 
             var imagePath = $"screenshots/{machine.MachineId}/{requestId}.jpg";
             var imageSha = await _github.GetFileShaAsync(imagePath, branch, ct);
-            await _github.PutFileAsync(imagePath, jpeg, branch,
+            await _github.PutFileAsync(imagePath, _dataEncryption.EncryptIfEnabled(jpeg), branch,
                 $"screenshot: {machine.Hostname} ({machine.MachineId}) {requestId}", imageSha, ct);
 
             var capturedUtc = DateTimeOffset.UtcNow.ToString("O");

@@ -35,6 +35,10 @@ public sealed class ConsoleOptions
     /// <summary>Where the operator's private signing key lives. Blank = per-user app data
     /// (see ControlSigning.DefaultKeyPath). Never inside a repo.</summary>
     public string SigningKeyPath { get; set; } = "";
+    /// <summary>Where the operator's private data-decryption key lives (see DataEncryptionKeys).
+    /// Blank = per-user app data. A separate key/file from SigningKeyPath on purpose — one key,
+    /// one job. Never inside a repo.</summary>
+    public string DataKeyPath { get; set; } = "";
     /// <summary>The clone of the CODE repo the console runs from, for the Update button. Blank =
     /// found by walking up from where the console is running.</summary>
     public string CodeRepoPath { get; set; } = "";
@@ -293,6 +297,7 @@ public sealed class ControlRepo
     private readonly RelayHub _relay;
     private readonly RelayKeyStore _keys;
     private readonly ControlSigning _signing;
+    private readonly DataEncryptionKeys _dataKeys;   // decrypts heartbeats/logs/screenshots agents sealed to us
     private readonly RelayAdvert? _advert;   // the console's own LAN name; null = nothing to say
     private readonly TunnelService? _tunnel; // when it is up, THIS is what PCs are told to dial (it works from any network)
     private readonly ILogger<ControlRepo> _log;
@@ -300,9 +305,10 @@ public sealed class ControlRepo
     /// <summary>The files agents refuse unless signed (agent.json too, but CI signs that one).</summary>
     private static readonly string[] SignedFiles = { ManifestPath, "commands.json" };
 
-    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, ILogger<ControlRepo> log, RelayAdvert? advert = null, TunnelService? tunnel = null)
+    public ControlRepo(ConsoleOptions opt, RelayHub relay, RelayKeyStore keys, ControlSigning signing, DataEncryptionKeys dataKeys, ILogger<ControlRepo> log, RelayAdvert? advert = null, TunnelService? tunnel = null)
     {
         _signing = signing;
+        _dataKeys = dataKeys;
         _advert = advert;
         _tunnel = tunnel;
         _opt = opt;
@@ -399,6 +405,9 @@ public sealed class ControlRepo
 
         resp.Programs = programNodes.Select(ToProgramView).ToList();
         resp.Signing = ReadSigningStatus(resp.Warnings);
+        if (!_dataKeys.HasKey)
+            resp.Warnings.Add("Fleet data (heartbeats, logs, screenshots) isn't encrypted: this computer has no data key yet, so " +
+                "agents built once you set one up will send it in the clear until then. Set it up once: docs/SETUP.md, \"Encrypt fleet data\".");
         return resp;
     }
 
@@ -814,7 +823,7 @@ public sealed class ControlRepo
         await _git.FetchAsync(_opt.Remote, ct);
         var meta = ReadLatestScreenshotMeta(machineId);
         if (meta is null || string.IsNullOrWhiteSpace(meta.Path)) return null;
-        return _git.ReadFileBytesFromRef(FleetRef, meta.Path);
+        return _dataKeys.DecryptIfNeeded(_git.ReadFileBytesFromRef(FleetRef, meta.Path), meta.Path);
     }
 
     /// <summary>Fetch, then return the log tail a machine last uploaded with its heartbeat, or null if none.
@@ -823,7 +832,9 @@ public sealed class ControlRepo
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(machineId ?? "", "^[A-Za-z0-9-]{1,64}$")) return null;
         await _git.FetchAsync(_opt.Remote, ct);
-        return _git.ReadFileFromRef(FleetRef, $"logs/{machineId}.txt");
+        var path = $"logs/{machineId}.txt";
+        var raw = _dataKeys.DecryptIfNeeded(_git.ReadFileBytesFromRef(FleetRef, path), path);
+        return raw is null ? null : Encoding.UTF8.GetString(raw);
     }
 
     /// <summary>Queue a live remote-control session on a machine via commands.json, then push,
@@ -1285,18 +1296,20 @@ public sealed class ControlRepo
 
     // ---- mapping helpers ---------------------------------------------------------------
 
-    /// <summary>Read all heartbeat files from the fleet-state branch.</summary>
+    /// <summary>Read all heartbeat files from the fleet-state branch. An agent build with the
+    /// data key baked in sends these encrypted (see FleetDataCipher); older/unconfigured agents
+    /// still send plain JSON, and DecryptIfNeeded passes those through unchanged.</summary>
     private List<HeartbeatFile> ReadHeartbeats()
     {
         var heartbeats = new List<HeartbeatFile>();
         foreach (var file in _git.ListDirOnRef(FleetRef, StateDir))
         {
             if (!file.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) continue;
-            var text = _git.ReadFileFromRef(FleetRef, file);
-            if (text is null) continue;
+            var raw = _dataKeys.DecryptIfNeeded(_git.ReadFileBytesFromRef(FleetRef, file), file);
+            if (raw is null) continue;
             try
             {
-                var hb = JsonSerializer.Deserialize<HeartbeatFile>(text, JsonRead);
+                var hb = JsonSerializer.Deserialize<HeartbeatFile>(Encoding.UTF8.GetString(raw), JsonRead);
                 if (hb is not null && !string.IsNullOrWhiteSpace(hb.MachineId)) heartbeats.Add(hb);
             }
             catch (Exception ex) { _log.LogWarning(ex, "Unreadable heartbeat {File}", file); }
