@@ -101,6 +101,7 @@ public sealed class FleetReporter : IFleetReporter
                 AppliedProgramIds = applied,
                 LastError = record.Errors.Count > 0 ? record.Errors[0] : null,
                 MacAddresses = GetMacAddresses(),
+                Antivirus = OperatingSystem.IsWindows() ? SecurityInventory.GetAntivirusNames() : new List<string>(),
                 RelayPublicKey = _relayIdentity.PublicKey
             };
 

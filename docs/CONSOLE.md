@@ -70,6 +70,9 @@ The tab you were on is remembered across reloads, and a link such as `http://loc
 - **Machines** — every machine that has reported, with an online/offline dot, OS, agent
   version, last-seen, how many programs it's running, and last sync status. Type a **label**
   to give a machine a friendly name (stored in `fleet.json`).
+  Under the OS, an **AV:** line lists the antivirus products Windows Security Center reports for that PC
+  (read-only; highlighted when it is anything other than Windows' own Defender). Handy on second-hand PCs
+  that still carry the previous owner's antivirus. Older agents don't report it.
 - **Targeting** — a grid of programs (rows) × machines (columns). Tick a box to run that
   program on that machine. The **All** toggle per program means "every machine, including
   ones that report in later" (it clears the program's `target`); turn it off to pick an

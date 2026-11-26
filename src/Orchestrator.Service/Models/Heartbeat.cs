@@ -58,6 +58,11 @@ public sealed class Heartbeat
     [JsonPropertyName("lastError")]
     public string? LastError { get; set; }                     // first error from the last sync, if any (for quick triage)
 
+    /// <summary>Antivirus products Windows Security Center lists on this machine (read-only inventory,
+    /// so second-hand PCs with a previous owner's antivirus can be spotted from the console).</summary>
+    [JsonPropertyName("antivirus")]
+    public List<string> Antivirus { get; set; } = new();
+
     [JsonPropertyName("macAddresses")]
     public List<string> MacAddresses { get; set; } = new();    // this machine's NIC MACs (for Wake-on-LAN)
 
@@ -85,6 +90,7 @@ public sealed class Heartbeat
             ManifestVersion ?? "",
             string.Join(',', AppliedProgramIds),
             string.Join(',', MacAddresses),
+            string.Join(',', Antivirus),
             RelayPublicKey ?? "",   // a new key must reach the console promptly, not hours later
             LastError ?? "");
 }

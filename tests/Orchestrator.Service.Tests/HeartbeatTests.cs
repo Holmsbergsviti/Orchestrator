@@ -33,6 +33,20 @@ public sealed class HeartbeatTests
     // ---- Signature ---------------------------------------------------------------------
 
     [Fact]
+    public void Signature_ChangesWhenTheAntivirusListChanges()
+    {
+        var a = Sample("2026-01-01T00:00:00Z");
+        var b = Sample("2026-01-01T00:00:00Z");
+        b.Antivirus = new List<string> { "Avast Free Antivirus" };
+        Assert.NotEqual(a.Signature, b.Signature);   // a newly found antivirus must reach the console promptly
+    }
+
+    [Fact]
+    public void AntivirusNames_AreSortedAndDeduplicated()
+        => Assert.Equal(new[] { "Avast", "Windows Defender" },
+            SecurityInventory.Normalize(new[] { "Windows Defender", "Avast", " avast ", "", "windows defender" }));
+
+    [Fact]
     public void Signature_ChangesWithHeartbeatCadence()
     {
         var a = Sample("2026-07-24T10:00:00Z", "p1");

@@ -98,6 +98,7 @@
     .tabs button:hover { box-shadow: none; color: var(--accent); }
     .tabs button.active { background: var(--card); border-color: var(--line); color: var(--accent); text-shadow: var(--glow); font-weight: 700; }
     [data-tab][hidden] { display: none; }
+    .avwarn { color: var(--warn); }
     .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
     .seg button { border: none; border-radius: 0; padding: 6px 13px; background: rgba(0, 0, 0, .55); }
     .seg button:hover { box-shadow: none; }
@@ -527,6 +528,16 @@
       renderTargeting();
     }
 
+    // Which antivirus the PC reports (Windows Security Center). Anything other than Windows' own is
+    // flagged: on second-hand PCs it is usually the previous owner's leftover.
+    function antivirusLine(m) {
+      const av = m.antivirus || [];
+      if (av.length === 0) return '';
+      const other = av.filter(n => !/defender|windows security/i.test(n));
+      return el('div', { className: other.length ? 'avwarn' : '', title: 'Antivirus reported by Windows Security Center',
+                         textContent: 'AV: ' + av.join(', ') });
+    }
+
     function renderMachines() {
       const tb = $('#machines tbody'); tb.innerHTML = '';
       $('#noMachines').hidden = state.machines.length > 0;
@@ -581,7 +592,7 @@
           status,
           el('td', {}, labelInput),
           el('td', {}, el('code', { textContent: m.hostname })),
-          el('td', { className: 'muted', textContent: m.os || '—' }),
+          el('td', { className: 'muted' }, [m.os || '—', antivirusLine(m)]),
           el('td', { className: 'muted' }, [agentBuildCell(m)]),
           el('td', { title: m.lastSeenUtc || '', textContent: relTime(m.lastSeenUtc) }),
           el('td', { textContent: (m.appliedProgramIds || []).length + ' program(s)' }),
