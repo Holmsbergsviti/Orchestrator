@@ -1,13 +1,11 @@
 // =====================================================================================
 // FILE PURPOSE (in plain terms):
-//   The mandatory on-screen indicator for a live remote-control session — a small,
-//   always-on-top, unmissable banner. It is NOT optional and there is no config flag to hide
-//   it: whoever is physically at the machine must always be able to see a session is active
-//   and end it themselves (click anywhere on the banner), regardless of what the console side
-//   wants. It doubles as the session's only on-machine status display: it comes up as soon as
+//   The optional on-screen indicator for a live remote-control session (config
+//   ShowSessionBanner, off by default; when off no window is ever created): a small,
+//   always-on-top banner that tells whoever is at the machine a session is active and lets them
+//   end it by clicking it. It doubles as an on-machine status display: it comes up as soon as
 //   a session is attempted ("connecting…"), turns red once frames are actually flowing, and
-//   turns grey with the reason if the session can't start — so a failure is visible to whoever
-//   is at the keyboard instead of hiding in a log file. Built directly on the Win32 API (raw
+//   turns grey with the reason if the session can't start. Built directly on the Win32 API (raw
 //   user32/gdi32 P/Invoke, same style as ScreenCaptureService's GetSystemMetrics use) rather
 //   than WinForms/WPF, specifically so
 //   this project keeps building and unit-testing on macOS/Linux — pulling in a UI framework
@@ -60,8 +58,12 @@ internal sealed class SessionBanner : IDisposable
     private int _color;
     private IntPtr _hwnd;
 
-    public SessionBanner(string initialText, int initialColor, Action onEnd)
+    /// <summary>False when the banner is switched off (<c>ShowSessionBanner</c>): then no window is ever created and everything here is a no-op.</summary>
+    public bool Enabled { get; }
+
+    public SessionBanner(string initialText, int initialColor, Action onEnd, bool enabled = true)
     {
+        Enabled = enabled;
         _text = initialText;
         _color = initialColor;
         _onEnd = onEnd;
@@ -82,6 +84,7 @@ internal sealed class SessionBanner : IDisposable
     /// the window closes. Call this on its own dedicated thread — it blocks until closed.</summary>
     public void RunMessageLoop()
     {
+        if (!Enabled) { _closed.Set(); return; }   // switched off: draw nothing on this PC
         var hInstance = GetModuleHandleW(null);
         var wc = new WNDCLASSEX
         {
@@ -111,12 +114,12 @@ internal sealed class SessionBanner : IDisposable
         _closed.Set();
     }
 
-    /// <summary>Ask the banner to close from another thread. Safe to call multiple times, and
-    /// safe to call before the window exists yet (a no-op in that case).</summary>
     /// <summary>True when the banner is hidden from screen captures (see where the window is created).</summary>
     public bool ExcludedFromCapture => _excludedFromCapture;
     private volatile bool _excludedFromCapture;
 
+    /// <summary>Ask the banner to close from another thread. Safe to call multiple times, and
+    /// safe to call before the window exists yet (a no-op in that case).</summary>
     public void RequestClose()
     {
         if (_hwnd != IntPtr.Zero) PostMessageW(_hwnd, WM_APP_END, IntPtr.Zero, IntPtr.Zero);

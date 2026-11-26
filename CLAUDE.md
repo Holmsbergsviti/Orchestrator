@@ -82,8 +82,7 @@ program never runs at boot, and it launches in the interactive user session.
   `winsta0\default`, with SYSTEM's own environment (never the user's: the self-extracting exe would unpack into a
   user-writable temp folder). Reason: the install folder is locked to SYSTEM+Administrators (it holds the token), so
   the old scheduled task "run as the user" failed with 0x80070005 for any account that isn't allowed to run the
-  agent. `LaunchSessionsAsSystem` (default true) switches it off; if the launch fails the old task route is the
-  fallback (its outcome is logged ~40 s later by `LogTaskOutcomeLater`). Nobody signed in (login screen, e.g. after a restart) is
+  agent. There is no fallback to a scheduled task any more: a failed launch is logged and the next request tries again. Nobody signed in (login screen, e.g. after a restart) is
   covered too: the helper is started in the console session on `winsta0\winlogon`, and `InputDesktop.Attach()`
   (called per frame by `ScreenCaptureService` and per event by `RemoteInputInjector`) moves the calling thread to
   whichever desktop is on screen, so the lock screen and UAC prompts work as well. `SessionBanner` owns a window,
@@ -129,7 +128,7 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
 - Pending sessions live in `RelayHub`'s memory — restarting the console cancels them.
 - Non-localhost `Urls` forces `Console:AccessToken` + a cert (fail-fast in `Program.cs`). Agents
   pin a self-signed cert by SHA-1 thumbprint (`RelayCertThumbprint`); the console prints it at startup.
-- Failures must stay visible on both ends: the target's `SessionBanner` shows the reason, and
+- Failures must stay visible on both ends: the target's `SessionBanner` shows the reason (only when `ShowSessionBanner` is on, default off since 2026-11-26 at the owner's request: his PCs are unshared; otherwise it goes to the agent log), and
   `RelayHub` sends the viewer JSON status text messages (frames are binary, so they never collide).
 - Input flows browser→agent as JSON **text** on the same socket (`RemoteInputEvent` parses it,
   `RemoteInputInjector` injects via `SendInput`). Mouse positions are fractions of the virtual
@@ -139,8 +138,8 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
 - Sessions run in renewable **grants** (`RemoteSessionMaxMinutes`, ceiling `MaxSessionGrants`).
   The agent owns the deadline and broadcasts it; the viewer only displays it. Only the frame
   loop writes to the agent's socket — the receive loop mutates state and flags it, because a
-  WebSocket allows one concurrent writer. `RunInteractiveRemoteSessionOnce` gets
-  `RemoteSessionAbsoluteMax` so Task Scheduler can't kill a legitimately renewed session.
+  WebSocket allows one concurrent writer. `RunInteractiveRemoteSessionOnce` gives the helper a kill time of
+  `RemoteSessionAbsoluteMax` + 15 min so a legitimately renewed session isn't cut short.
 - Sessions are audited to `logs/remote-sessions.json` — its own file, not `sync-history.json`,
   because the session process (user session) and the service (session 0) would otherwise
   read-modify-write the same file and corrupt it.

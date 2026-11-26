@@ -1,7 +1,7 @@
 // =====================================================================================
 // FILE PURPOSE (in plain terms):
-//   Runs ONE live remote-control session end-to-end: shows the mandatory on-screen banner
-//   (SessionBanner) on a dedicated UI thread, opens an outbound WebSocket to the console's
+//   Runs ONE live remote-control session end-to-end: optionally shows the on-screen banner
+//   (SessionBanner, only when ShowSessionBanner is on) on a dedicated UI thread, opens an outbound WebSocket to the console's
 //   relay, and loops capturing the screen (reusing ScreenCaptureService) and sending each
 //   frame while the session is active. This is the interactive, long-running counterpart to
 //   ScreenshotService's one-shot capture-and-upload. It runs both directions at once: frames
@@ -11,11 +11,9 @@
 //   whole session; there's no path that keeps streaming or injecting input after that, and
 //   anything still held down is released on the way out.
 //
-//   Failures are made VISIBLE rather than silent: the banner comes up before the connection
-//   is attempted and, if the session can't start, stays up for a few seconds showing why.
-//   This process runs in the logged-on user's session, so that banner is the only feedback
-//   channel it has to a human — the operator at the console just sees "no frames", and the
-//   log file lives on a machine they may not be sitting at.
+//   Failures are made VISIBLE rather than silent: the banner (when on) comes up before the
+//   connection is attempted and, if the session can't start, stays up for a few seconds showing
+//   why; the reason also goes to the agent log, which the console shows through its "Log" link.
 // =====================================================================================
 
 using System.Diagnostics;             // Stopwatch (frame pacing)
@@ -109,7 +107,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
         // The banner goes up FIRST, before anything can fail, so that "nothing happened at all"
         // is never one of the outcomes someone at this machine has to interpret.
         using var banner = new SessionBanner(ConnectingText, SessionBanner.ColorPending,
-            () => { SetEndReason("banner"); SafeCancel(sessionCts); });
+            () => { SetEndReason("banner"); SafeCancel(sessionCts); }, _config.ShowSessionBanner);
         var uiThread = new Thread(banner.RunMessageLoop) { IsBackground = true };
         uiThread.SetApartmentState(ApartmentState.STA);   // conventional for a Win32 message-loop thread
         uiThread.Start();
@@ -233,8 +231,13 @@ public sealed class RemoteSessionService : IRemoteSessionService
     /// <summary>Leave a failure reason on screen long enough to be read (or until whoever is at
     /// the machine clicks the banner away). This is the only place a person ever finds out why
     /// a requested session didn't start.</summary>
-    private static async Task ShowFailureAsync(SessionBanner banner, string reason, CancellationToken ct)
+    private async Task ShowFailureAsync(SessionBanner banner, string reason, CancellationToken ct)
     {
+        if (!banner.Enabled)
+        {
+            _log.LogWarning("remote-session: {Reason}", reason);   // no banner on this PC: the log is the only place it shows
+            return;
+        }
         banner.SetState(reason, SessionBanner.ColorPending);
         try { await Task.Delay(ErrorDisplay, ct); } catch (OperationCanceledException) { /* dismissed or shutting down */ }
     }
@@ -255,7 +258,7 @@ public sealed class RemoteSessionService : IRemoteSessionService
         {
             _log.LogInformation("remote-session {Id}: connected to the console's relay", sessionId);
             banner.SetState(ActiveBannerText(), SessionBanner.ColorActive);
-            if (!banner.ExcludedFromCapture)
+            if (banner.Enabled && !banner.ExcludedFromCapture)
                 _log.LogInformation("remote-session {Id}: this Windows can't hide the banner from the screen capture (needs Windows 10 2004+), so it appears in the operator's view", sessionId);
 
             var receiveTask = ReceiveLoopAsync(ws, sessionId, banner, sessionCts);

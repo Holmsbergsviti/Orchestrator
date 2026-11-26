@@ -72,13 +72,13 @@ public sealed class SyncService : ISyncService   // the actual implementation
     {
         var sw = Stopwatch.StartNew();   // start timing this cycle
         var record = new SyncRecord();   // the result we'll fill in and return
-        _log.LogInformation("========== SYNC CYCLE STARTED ==========");
+        _log.LogDebug("========== SYNC CYCLE STARTED ==========");
 
         try
         {
             _configService.EnsureDirectories();   // make sure our working folders exist
 
-            _log.LogInformation("Fetching manifest from GitHub...");
+            _log.LogDebug("Fetching manifest from GitHub...");
             var remote = await _github.GetManifestAsync(ct);   // download the latest manifest
             if (remote is null)   // download/parse failed?
             {
@@ -106,7 +106,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
                 var plan = _manifests.BuildPlan(effective, local, checksumCache);   // work out the to-do list for this machine
 
                 if (!plan.HasWork)   // nothing to install/update/delete?
-                    _log.LogInformation("Everything up to date.");
+                    _log.LogDebug("Everything up to date.");
 
                 // Folders that still hold an active program's files: a delete must never remove them.
                 var inUsePaths = effective.ActivePrograms.Select(p => p.InstallPath).ToList();
@@ -194,7 +194,7 @@ public sealed class SyncService : ISyncService   // the actual implementation
             record.Success ? "completed" : "completed with errors",
             record.DurationSeconds, record.Installed.Count, record.Updated.Count,
             record.Deleted.Count, record.Errors.Count);   // log the summary line
-        _log.LogInformation("========== SYNC CYCLE COMPLETED ==========");
+        _log.LogDebug("========== SYNC CYCLE COMPLETED ==========");
         return record;   // return the finished record
     }
 
