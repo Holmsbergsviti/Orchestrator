@@ -87,7 +87,7 @@ Startup registration depends on `runAsAdmin`:
 
 ## Remote control: the viewer never shows a picture
 The viewer tab says what stage it's stuck at — read that first, then match it below. The
-target machine also shows a banner with the reason, and logs it to `logs\log-*.txt` there.
+target machine logs the reason to `logs\log-*.txt` there (and shows it on a banner when `ShowSessionBanner` is on).
 
 **"Waiting for … to pick up the request"** — the agent hasn't connected yet.
 - It only starts on that machine's **next sync**. Wait one `SyncIntervalMinutes`.

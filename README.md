@@ -18,7 +18,7 @@ specific machines** to control each PC individually.
 - **Fleet commands** — shutdown / restart / Wake-on-LAN / screenshot, each written once with a
   nonce so it runs exactly once.
 - **Live remote control** — optional, consent-visible screen + input session over a WebSocket
-  relay, with a mandatory on-screen banner and an audit log on the target.
+  relay, with an optional on-screen banner and an audit log on the target.
 
 ## Repository layout
 
@@ -118,8 +118,8 @@ agent runs it exactly once and never loops after a reboot:
   `fleet-state` branch.
 - **Remote** — a live remote-control session: the agent opens an *outbound* WebSocket to the
   console's relay, streams frames out and injects the operator's mouse/keyboard events in.
-  A red **"Remote control active — click to end"** banner is always shown on the target and cannot
-  be disabled; sessions are time-boxed (`RemoteSessionMaxMinutes`, default 30) and every session is
+  A red **"Remote control active — click to end"** banner can be shown on the target (`ShowSessionBanner`,
+  off by default); sessions are time-boxed (`RemoteSessionMaxMinutes`, default 30) and every session is
   recorded in `logs\remote-sessions.json` on the machine. Details in [docs/CONSOLE.md](docs/CONSOLE.md).
 
 ## Agent self-update

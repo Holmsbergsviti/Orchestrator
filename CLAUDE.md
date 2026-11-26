@@ -129,7 +129,7 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
 - Pending sessions live in `RelayHub`'s memory — restarting the console cancels them.
 - Non-localhost `Urls` forces `Console:AccessToken` + a cert (fail-fast in `Program.cs`). Agents
   pin a self-signed cert by SHA-1 thumbprint (`RelayCertThumbprint`); the console prints it at startup.
-- Failures must stay visible on both ends: the target's `SessionBanner` shows the reason, and
+- Failures must stay visible on both ends: the target's `SessionBanner` shows the reason (only when `ShowSessionBanner` is on, default off since 2026-11-26 at the owner's request: his PCs are unshared; otherwise it goes to the agent log), and
   `RelayHub` sends the viewer JSON status text messages (frames are binary, so they never collide).
 - Input flows browser→agent as JSON **text** on the same socket (`RemoteInputEvent` parses it,
   `RemoteInputInjector` injects via `SendInput`). Mouse positions are fractions of the virtual

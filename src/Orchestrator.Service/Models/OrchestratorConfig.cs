@@ -53,6 +53,7 @@ public sealed class OrchestratorConfig
     public bool UploadLogs { get; set; } = true;                // true = also commit the newest part of this agent's log (logs/<machineId>.txt) with each heartbeat, so the console can show it
     public bool LaunchSessionsAsSystem { get; set; } = true;    // true = start screenshots/remote sessions from the service on the user's desktop (works for any account); false = the old scheduled task run as the user
     public int LogUploadMinutes { get; set; } = 2;              // how often the log tail is committed while UploadLogs is on (at most once per sync cycle)
+    public bool ShowSessionBanner { get; set; } = false;        // true = a red "remote session" banner is shown on the PC during a live session (click it to end); false = nothing is drawn on the PC, failures go to the log only
     public int LogRetentionDays { get; set; } = 1;              // this PC's own log files older than this many days are deleted (0 = keep forever)
     public int LogMaxTotalMegabytes { get; set; } = 5;          // and the oldest are deleted until all log files together fit under this (0 = no size limit)
 

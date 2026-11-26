@@ -60,8 +60,12 @@ internal sealed class SessionBanner : IDisposable
     private int _color;
     private IntPtr _hwnd;
 
-    public SessionBanner(string initialText, int initialColor, Action onEnd)
+    /// <summary>False when the banner is switched off (<c>ShowSessionBanner</c>): then no window is ever created and everything here is a no-op.</summary>
+    public bool Enabled { get; }
+
+    public SessionBanner(string initialText, int initialColor, Action onEnd, bool enabled = true)
     {
+        Enabled = enabled;
         _text = initialText;
         _color = initialColor;
         _onEnd = onEnd;
@@ -82,6 +86,7 @@ internal sealed class SessionBanner : IDisposable
     /// the window closes. Call this on its own dedicated thread — it blocks until closed.</summary>
     public void RunMessageLoop()
     {
+        if (!Enabled) { _closed.Set(); return; }   // switched off: draw nothing on this PC
         var hInstance = GetModuleHandleW(null);
         var wc = new WNDCLASSEX
         {
