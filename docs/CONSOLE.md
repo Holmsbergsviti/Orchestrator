@@ -90,9 +90,8 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
   expire after an hour, so a newly installed waker doesn't replay old ones.
 - **Screenshot** (Machines table, Power column) — requests a screen capture on that machine's
   next sync. Written to `commands.json` with a nonce, same one-shot pattern as shutdown/restart.
-  The service itself runs in Windows session 0 (no desktop), so it only schedules the actual
-  capture into the **logged-on user's interactive session** — it does nothing if no one is
-  signed in there. Once uploaded (to `screenshots/<machineId>/` on the `fleet-state` branch,
+  The service itself runs in Windows session 0 (no desktop), so it starts the actual capture on
+  the **console screen** (the signed-in user's desktop, or the login screen when nobody is signed in). Once uploaded (to `screenshots/<machineId>/` on the `fleet-state` branch,
   alongside the heartbeats), a **View** link appears next to the button to open the latest one.
 - **Remote** (Machines table, Power column) — starts a **live remote-control session**: opens a
   viewer tab that shows that machine's screen at up to ~15 fps. Needs one-time setup on both
@@ -140,8 +139,10 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
     keyboard (Ctrl+W, Ctrl+T, Alt+Tab and so on), which the page can't otherwise keep from the
     browser. Hold **Esc** to leave. Keys the operating system keeps for itself (on a Mac, Cmd+Tab and
     Cmd+Q) still can't be captured by any web page.
-  - Input can't reach an elevated window, a UAC prompt, or the lock screen. Windows blocks
-    synthetic input to those on purpose; the screen keeps streaming, clicks just do nothing.
+  - The session follows the screen onto the **login screen, the lock screen and UAC prompts**: the
+    picture shows them and typing/clicking works there, because the helper runs as SYSTEM and
+    attaches to whichever desktop is showing (`InputDesktop`). The red banner moves along with it.
+    Ctrl+Alt+Del itself can't be sent (Windows only accepts it from the real keyboard).
   - Anything still held down (a modifier, a mouse button) is released automatically when the
     session ends, however it ends.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.

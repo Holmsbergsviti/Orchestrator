@@ -28,6 +28,8 @@ internal sealed class SessionBanner : IDisposable
     private const string ClassName = "OrchSessionBanner";
     private const uint WM_DESTROY = 0x0002;
     private const uint WM_PAINT = 0x000F;
+    private const uint WM_TIMER = 0x0113;
+    private const int DesktopWatchTimer = 1;   // timer id: checks once a second which desktop is on screen
     private const uint WM_LBUTTONUP = 0x0202;
     private const uint WM_CLOSE = 0x0010;
     private const uint WM_APP_END = 0x8000 + 1;   // custom: "close this from another thread"
@@ -94,27 +96,12 @@ internal sealed class SessionBanner : IDisposable
         if (RegisterClassExW(ref wc) == 0)
             throw new InvalidOperationException($"RegisterClassExW failed (error {Marshal.GetLastWin32Error()})");
 
-        var screenW = GetSystemMetrics(SM_CXSCREEN);
-        var x = Math.Max(0, screenW - Width - 16);
-        const int y = 16;
-
-        _hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, ClassName, "Orchestrator",
-            WS_POPUP | WS_VISIBLE, x, y, Width, Height, IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
-        if (_hwnd == IntPtr.Zero)
+        _hInstance = hInstance;
+        if (!CreateBannerWindow())
         {
             _closed.Set();
             throw new InvalidOperationException($"CreateWindowExW failed (error {Marshal.GetLastWin32Error()})");
         }
-
-        // Visible on the PC, but left out of what the screen capture sees: otherwise the operator's own
-        // view has a banner stuck over the top-right corner of the very screen they came to look at.
-        // The person at the machine still sees it and can still end the session by clicking it; only
-        // the picture sent to the operator omits it. Needs Windows 10 2004 or newer; on an older
-        // Windows the call fails and the banner simply stays in the picture, as before.
-        _excludedFromCapture = SetWindowDisplayAffinity(_hwnd, WDA_EXCLUDEFROMCAPTURE);
-
-        ShowWindow(_hwnd, SW_SHOW);
-        UpdateWindow(_hwnd);
 
         while (GetMessageW(out var msg, IntPtr.Zero, 0, 0))
         {
@@ -133,6 +120,57 @@ internal sealed class SessionBanner : IDisposable
     public void RequestClose()
     {
         if (_hwnd != IntPtr.Zero) PostMessageW(_hwnd, WM_APP_END, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    private IntPtr _hInstance;
+    private volatile bool _moving;   // true while the window is being rebuilt on another desktop: its destruction must not end the session
+
+    /// <summary>Create the banner on whatever desktop this thread is attached to, hidden from the capture
+    /// where Windows allows it, with a once-a-second timer that watches for the screen changing desktops.</summary>
+    private bool CreateBannerWindow()
+    {
+        var screenW = GetSystemMetrics(SM_CXSCREEN);
+        var x = Math.Max(0, screenW - Width - 16);
+        const int y = 16;
+
+        _hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, ClassName, "Orchestrator",
+            WS_POPUP | WS_VISIBLE, x, y, Width, Height, IntPtr.Zero, IntPtr.Zero, _hInstance, IntPtr.Zero);
+        if (_hwnd == IntPtr.Zero) return false;
+
+        // Visible on the PC, but left out of what the screen capture sees: otherwise the operator's own
+        // view has a banner stuck over the top-right corner of the very screen they came to look at.
+        // The person at the machine still sees it and can still end the session by clicking it; only
+        // the picture sent to the operator omits it. Needs Windows 10 2004 or newer; on an older
+        // Windows the call fails and the banner simply stays in the picture, as before.
+        _excludedFromCapture = SetWindowDisplayAffinity(_hwnd, WDA_EXCLUDEFROMCAPTURE);
+
+        ShowWindow(_hwnd, SW_SHOW);
+        UpdateWindow(_hwnd);
+        SetTimer(_hwnd, (IntPtr)DesktopWatchTimer, 1000, IntPtr.Zero);
+        return true;
+    }
+
+    /// <summary>The screen moved to another desktop (a UAC prompt, the lock screen, the login screen), where a
+    /// window on the old desktop can't be seen. Rebuild the banner on the new one so whoever is at the PC
+    /// still sees the session and can still end it. A window can't change desktops, and a thread that owns one
+    /// can't either, so: destroy it, move the thread, create it again. If that fails the banner is put back where it was.</summary>
+    private void FollowInputDesktop(IntPtr hWnd)
+    {
+        var target = InputDesktop.CurrentInputName();
+        if (target is null || string.Equals(target, InputDesktop.ThreadDesktopName(), StringComparison.OrdinalIgnoreCase)) return;
+
+        _moving = true;
+        try
+        {
+            DestroyWindow(hWnd);
+            _hwnd = IntPtr.Zero;
+            if (!InputDesktop.Attach() || !CreateBannerWindow())
+            {
+                // Could not move: show it again on the desktop this thread is still on, so it is never just gone.
+                if (_hwnd == IntPtr.Zero) CreateBannerWindow();
+            }
+        }
+        finally { _moving = false; }
     }
 
     /// <summary>Wait (bounded) for the message loop to actually finish. Returns false on timeout.</summary>
@@ -157,8 +195,11 @@ internal sealed class SessionBanner : IDisposable
                 try { _onEnd(); } catch { /* session may already be ending */ }
                 DestroyWindow(hWnd);
                 return IntPtr.Zero;
+            case WM_TIMER:
+                FollowInputDesktop(hWnd);
+                return IntPtr.Zero;
             case WM_DESTROY:
-                PostQuitMessage(0);
+                if (!_moving) PostQuitMessage(0);   // being rebuilt on another desktop is not the end
                 return IntPtr.Zero;
             default:
                 return DefWindowProcW(hWnd, msg, wParam, lParam);
@@ -249,6 +290,7 @@ internal sealed class SessionBanner : IDisposable
         int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
 
     [DllImport("user32.dll")] private static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+    [DllImport("user32.dll")] private static extern IntPtr SetTimer(IntPtr hWnd, IntPtr id, uint elapseMs, IntPtr proc);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool UpdateWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hWnd);

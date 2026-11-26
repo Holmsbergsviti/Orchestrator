@@ -5,7 +5,7 @@
 -->
 # Troubleshooting
 
-Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day; files older than `LogRetentionDays`, default 14, and the oldest beyond `LogMaxTotalMegabytes`, default 200, are deleted automatically). The service and any interactive
+Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day; files older than `LogRetentionDays`, default 1, and the oldest beyond `LogMaxTotalMegabytes`, default 5, are deleted automatically). The service and any interactive
 process it launches (run-now, screenshot, remote session) all write here, tagged by process id.
 Structured history: `C:\Windows\Orch\logs\sync-history.json`.
 Remote-control audit trail: `C:\Windows\Orch\logs\remote-sessions.json`.
@@ -91,8 +91,9 @@ target machine also shows a banner with the reason, and logs it to `logs\log-*.t
 
 **"Waiting for … to pick up the request"** — the agent hasn't connected yet.
 - It only starts on that machine's **next sync**. Wait one `SyncIntervalMinutes`.
-- Nobody signed in on that machine? Then it can't run: the capture needs a desktop session,
-  and the log says `no interactive user is logged on`.
+- Nobody signed in on that machine? That is fine: it starts on the login screen
+  (`started on (login screen) desktop` in the log). It only can't run when the PC has no console
+  session at all yet, i.e. very early in boot.
 - The log says `task state after start: ... Last Result: -2147024891` (0x80070005, access denied)?
   That is the old route, where the signed-in user was not allowed to run the agent from its locked
   folder. Current builds start the helper from the service (`started on <user>'s desktop`) and only
@@ -139,14 +140,16 @@ and `relay identity:`.
 **"This console doesn't recognise the session"** — same cause: pending sessions are held in
 memory only, so a console restart cancels them.
 
-**The picture is live but frozen or black** — capture returns nothing while the workstation is
-locked, on the UAC secure desktop, or after an RDP disconnect. It resumes on its own.
+**The picture is live but frozen or black** — the lock screen, the login screen and UAC prompts
+are followed automatically. Capture can still return nothing for a moment while Windows switches
+desktops or after an RDP disconnect; it resumes on its own. On an agent older than this feature
+it stays frozen on those screens (update the agent).
 
 **The picture is live but clicks and typing do nothing**
 - Check the viewer's **Input: on/off** button — off means view-only.
-- Windows refuses synthetic input aimed at an **elevated** window (Task Manager, regedit, an
-  admin console) or the **secure desktop** (UAC prompt, lock screen, Ctrl+Alt+Del). Nothing
-  can bypass that, by design. The agent logs `SendInput was blocked` at debug level.
+- The agent logs `Windows blocked injected input` once per session when `SendInput` is refused.
+  The helper runs as SYSTEM, so elevated windows and the UAC / lock / login screens normally accept
+  input; Ctrl+Alt+Del is the exception (Windows takes it only from the real keyboard).
 - Keyboard goes to the whole page, not the canvas, so you don't need to click first — but the
   browser tab does need focus.
 

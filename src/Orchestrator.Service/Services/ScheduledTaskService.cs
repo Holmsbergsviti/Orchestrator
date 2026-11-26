@@ -141,7 +141,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             return;
         if (nobody)
         {
-            _log.LogWarning("screenshot '{Id}': no interactive user is logged on — cannot capture; skipping", requestId);
+            _log.LogWarning("screenshot '{Id}': the PC has no console session to capture — cannot capture; skipping", requestId);
             return;
         }
 
@@ -202,7 +202,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             return;
         if (nobody)
         {
-            _log.LogWarning("remote-session '{Id}': no interactive user is logged on — cannot start; skipping", sessionId);
+            _log.LogWarning("remote-session '{Id}': the PC has no console session to show a screen on — cannot start; skipping", sessionId);
             return;
         }
 

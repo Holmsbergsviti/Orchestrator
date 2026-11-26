@@ -192,6 +192,7 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
 
     private void Send(INPUT input)
     {
+        InputDesktop.Attach();   // SendInput only reaches the desktop this thread is on; the login / lock / UAC screen is another one
         var sent = SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
         if (sent == 0)
         {

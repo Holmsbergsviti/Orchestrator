@@ -31,4 +31,12 @@ public class UserSessionLauncherTests
     {
         Assert.Equal("\"C:\\a.exe\"", UserSessionLauncher.BuildCommandLine("C:\\a.exe", ""));
     }
+
+    [Fact]
+    public void WithSomeoneSignedIn_StartsOnTheirNormalDesktop()
+        => Assert.Equal("winsta0\\default", UserSessionLauncher.DesktopFor(userSignedIn: true));
+
+    [Fact]
+    public void AtTheLoginScreen_StartsOnTheProtectedLoginDesktop()
+        => Assert.Equal("winsta0\\winlogon", UserSessionLauncher.DesktopFor(userSignedIn: false));
 }

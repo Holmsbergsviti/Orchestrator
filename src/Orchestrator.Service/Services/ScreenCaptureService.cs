@@ -89,6 +89,7 @@ public sealed class ScreenCaptureService : IScreenCaptureService
     {
         try
         {
+            InputDesktop.Attach();   // follow the login / lock / UAC screen when one is showing
             var x = GetSystemMetrics(SM_XVIRTUALSCREEN);
             var y = GetSystemMetrics(SM_YVIRTUALSCREEN);
             var width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -114,6 +115,7 @@ public sealed class ScreenCaptureService : IScreenCaptureService
         {
             try
             {
+                InputDesktop.Attach();   // each frame: the login / lock / UAC screen is a different desktop
                 var x = GetSystemMetrics(SM_XVIRTUALSCREEN);
                 var y = GetSystemMetrics(SM_YVIRTUALSCREEN);
                 var width = GetSystemMetrics(SM_CXVIRTUALSCREEN);

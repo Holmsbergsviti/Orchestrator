@@ -800,7 +800,7 @@ public sealed class ControlRepo
         {
             var sha = await CommitSignedAsync(
                 $"console: screenshot {machineId} ({DateTimeOffset.UtcNow:u})", new[] { cmdPath }, ct);
-            return new SaveResult { Ok = true, Message = "Screenshot requested — captured on the machine's next sync (needs a logged-on user).", Commit = sha };
+            return new SaveResult { Ok = true, Message = "Screenshot requested — captured on the machine's next sync (the login screen works too).", Commit = sha };
         }
         catch (GitException ex) { return Fail($"Commit/push failed: {ex.Message}"); }
     }
@@ -909,7 +909,7 @@ public sealed class ControlRepo
             {
                 Ok = true,
                 SessionId = sessionId,
-                Message = "Session requested — connects on the machine's next sync (needs a logged-on user).",
+                Message = "Session requested — connects on the machine's next sync (the login screen works too).",
                 Commit = sha
             };
         }

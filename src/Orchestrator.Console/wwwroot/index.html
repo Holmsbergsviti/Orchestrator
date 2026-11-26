@@ -535,9 +535,9 @@
           el('button', { type: 'button', textContent: 'Restart', title: 'Reboot this machine on its next sync',
             onclick: () => sendCommand(m, 'restart') }),
           el('button', { type: 'button', textContent: 'Screenshot',
-            title: 'Capture the screen on its next sync (needs a logged-on user)', onclick: () => requestScreenshot(m) }),
+            title: 'Capture the screen on its next sync (works on the login screen too)', onclick: () => requestScreenshot(m) }),
           el('button', { type: 'button', textContent: 'Remote',
-            title: 'Start a live remote-control session (needs a logged-on user)', onclick: () => startRemoteSession(m) })
+            title: 'Start a live remote-control session (works on the login screen too)', onclick: () => startRemoteSession(m) })
         ]);
         // A changed remote-control key is refused until the operator vouches for it: after a
         // reinstall that's expected, but it's also exactly what an impersonating machine looks like.
