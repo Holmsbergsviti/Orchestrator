@@ -98,6 +98,43 @@ public sealed class RemoteInputEventTests
         Assert.Equal(RemoteInputKind.End, evt.Kind);
     }
 
+    [Fact]
+    public void Paste_ParsesArbitraryText_UnfilteredUnlikeCode()
+    {
+        // Pasted text is content, not a key name — punctuation, whitespace and non-ASCII must
+        // survive, unlike Code's strict letters-and-digits vocabulary.
+        Assert.True(RemoteInputEvent.TryParse("""{"t":"paste","text":"héllo, world!\n"}""", out var evt));
+        Assert.Equal(RemoteInputKind.PasteText, evt.Kind);
+        Assert.Equal("héllo, world!\n", evt.Text);
+    }
+
+    [Fact]
+    public void Paste_WithoutText_IsRejected()
+    {
+        Assert.False(RemoteInputEvent.TryParse("""{"t":"paste"}""", out _));
+    }
+
+    [Fact]
+    public void Paste_WithEmptyText_IsRejected()
+    {
+        Assert.False(RemoteInputEvent.TryParse("""{"t":"paste","text":""}""", out _));
+    }
+
+    [Fact]
+    public void Paste_TextLongerThanTheCap_IsTruncatedNotRejected()
+    {
+        var huge = new string('x', 200_000);
+        Assert.True(RemoteInputEvent.TryParse($$"""{"t":"paste","text":"{{huge}}"}""", out var evt));
+        Assert.Equal(100_000, evt.Text.Length);
+    }
+
+    [Fact]
+    public void ClipboardRequest_IsRecognized()
+    {
+        Assert.True(RemoteInputEvent.TryParse("""{"t":"clipboard-request"}""", out var evt));
+        Assert.Equal(RemoteInputKind.ClipboardRequest, evt.Kind);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]

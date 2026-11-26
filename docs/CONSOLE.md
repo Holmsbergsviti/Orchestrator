@@ -150,6 +150,13 @@ The tab you were on is remembered across reloads, and a link such as `http://loc
     picture shows them and typing/clicking works there, because the helper runs as SYSTEM and
     attaches to whichever desktop is showing (`InputDesktop`). The red banner moves along with it.
     Ctrl+Alt+Del itself can't be sent (Windows only accepts it from the real keyboard).
+  - **Clipboard** opens a small panel: type or paste text there and press **Send & paste** to type
+    it into whatever has focus on the remote machine (it sets that machine's clipboard and sends
+    Ctrl+V), or press **Copy from remote** to pull its clipboard text back into yours. Ctrl+C/Ctrl+V
+    on the canvas itself are just forwarded as keystrokes like any other key — they work *within*
+    the remote machine, but don't move anything between your computer's clipboard and its, which is
+    what this panel is for. Typing in the panel's own text box stays on this page and is never sent
+    as remote keystrokes.
   - Anything still held down (a modifier, a mouse button) is released automatically when the
     session ends, however it ends.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.

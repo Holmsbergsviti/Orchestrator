@@ -71,6 +71,12 @@ public sealed class RemoteSessionService : IRemoteSessionService
     private int _grantsUsed;        // 1 after the initial grant; each renewal adds one
     private long _injectedEvents;   // for the audit record: was this session actually driven?
 
+    // A clipboard-request answer crosses from the receive loop to the frame loop the same way
+    // the deadline does (a flag plus a field read right after it): only the frame loop may write
+    // to the socket, so the receive loop can't just send the reply itself.
+    private int _clipboardResponsePending;
+    private string? _clipboardResponseText;
+
     public RemoteSessionService(IScreenCaptureService capture, IRemoteInputInjector input, IConfigService configService, ILogger<RemoteSessionService> log)
     {
         _capture = capture;
@@ -281,6 +287,13 @@ public sealed class RemoteSessionService : IRemoteSessionService
                         var json = $"{{\"t\":\"deadline\",\"untilUtc\":\"{Deadline.UtcDateTime:O}\",\"canRenew\":{(canRenew ? "true" : "false")}}}";
                         try { await SendAsync(ws, System.Text.Encoding.UTF8.GetBytes(json), isText: true, ct); }
                         catch (Exception ex) { _log.LogDebug(ex, "remote-session {Id}: deadline broadcast failed", sessionId); break; }
+                    }
+
+                    if (Interlocked.Exchange(ref _clipboardResponsePending, 0) == 1)
+                    {
+                        var reply = JsonSerializer.Serialize(new { t = "clipboard", text = _clipboardResponseText });
+                        try { await SendAsync(ws, System.Text.Encoding.UTF8.GetBytes(reply), isText: true, ct); }
+                        catch (Exception ex) { _log.LogDebug(ex, "remote-session {Id}: clipboard reply failed", sessionId); }
                     }
 
                     var jpeg = _capture.CaptureFrame();
@@ -504,6 +517,20 @@ public sealed class RemoteSessionService : IRemoteSessionService
                             sessionId, OrchestratorConfig.MaxSessionGrants);
                         Interlocked.Exchange(ref _deadlineChanged, 1);   // re-tell the viewer, which will hide its Renew button
                     }
+                    continue;
+                }
+                if (evt.Kind == RemoteInputKind.PasteText)
+                {
+                    _input.SetClipboardAndPaste(evt.Text);
+                    Interlocked.Increment(ref _injectedEvents);
+                    continue;
+                }
+                if (evt.Kind == RemoteInputKind.ClipboardRequest)
+                {
+                    // Read here (off the socket), hand to the frame loop to actually send —
+                    // see the comment on _clipboardResponsePending.
+                    _clipboardResponseText = _input.GetClipboardText();
+                    Interlocked.Exchange(ref _clipboardResponsePending, 1);
                     continue;
                 }
                 _input.Inject(evt);

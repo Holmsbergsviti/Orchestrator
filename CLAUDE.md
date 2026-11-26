@@ -135,6 +135,16 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   desktop, never pixels — the capture is downscaled and may span monitors. Parsing is
   deliberately strict (it becomes real keystrokes), and every held key/button is released when
   a session ends, or it stays stuck down on that desktop.
+- **No automatic clipboard sync between operator and remote machine** — Ctrl+C/Ctrl+V on the
+  canvas are just forwarded keystrokes, so they only ever act on whichever clipboard the remote
+  machine's own OS is holding. The viewer's **Clipboard** panel is the explicit substitute: `paste`
+  (carries free-form `text`, length-capped not character-filtered, unlike `code`) sets the remote
+  clipboard (`RemoteInputInjector.SetClipboardAndPaste`, Win32 `OpenClipboard`/`SetClipboardData`)
+  and immediately sends Ctrl+V; `clipboard-request` reads the remote clipboard
+  (`GetClipboardText`) and the reply crosses back to the viewer as a `{"t":"clipboard","text":...}`
+  JSON message. That reply can only go out through the frame loop (the single socket writer), so
+  the receive loop hands it over the same flag-plus-field pattern as the deadline broadcast
+  (`_clipboardResponsePending`/`_clipboardResponseText`) rather than writing to the socket itself.
 - Sessions run in renewable **grants** (`RemoteSessionMaxMinutes`, ceiling `MaxSessionGrants`).
   The agent owns the deadline and broadcasts it; the viewer only displays it. Only the frame
   loop writes to the agent's socket — the receive loop mutates state and flags it, because a
