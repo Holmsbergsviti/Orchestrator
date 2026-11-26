@@ -83,7 +83,12 @@ program never runs at boot, and it launches in the interactive user session.
   user-writable temp folder). Reason: the install folder is locked to SYSTEM+Administrators (it holds the token), so
   the old scheduled task "run as the user" failed with 0x80070005 for any account that isn't allowed to run the
   agent. `LaunchSessionsAsSystem` (default true) switches it off; if the launch fails the old task route is the
-  fallback (its outcome is logged ~40 s later by `LogTaskOutcomeLater`). Not covered: a UAC/secure-desktop prompt.
+  fallback (its outcome is logged ~40 s later by `LogTaskOutcomeLater`). Nobody signed in (login screen, e.g. after a restart) is
+  covered too: the helper is started in the console session on `winsta0\winlogon`, and `InputDesktop.Attach()`
+  (called per frame by `ScreenCaptureService` and per event by `RemoteInputInjector`) moves the calling thread to
+  whichever desktop is on screen, so the lock screen and UAC prompts work as well. `SessionBanner` owns a window,
+  which can't change desktops, so a 1 s timer destroys and recreates it on the new desktop (`_moving` stops that
+  from ending the session). Ctrl+Alt+Del can't be injected (would need `SendSAS`).
 - `runRequest` ("Run now") and startup runs use a **one-time interactive scheduled task**
   (`ScheduledTaskService.RunInteractiveOnce`, InteractiveToken) so they run in the logged-in user's
   session — that's the only way GUI/audio programs are visible.
@@ -205,7 +210,7 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
   newest `logs\log-*.txt` to `logs/<machineId>.txt` on `fleet-state` (`UploadLogs`, default on); the console serves it at
   `GET /api/log/{machineId}` (the "Log" link). Forget removes it too.
   **On-PC log retention (`LogRetention`).** The agent's own `logs\log-*.txt` are trimmed at startup and every ~6 h by age
-  (`LogRetentionDays`, default 14) then by total size (`LogMaxTotalMegabytes`, default 200), oldest first; the newest file
+  (`LogRetentionDays`, default 1 = about the past day) then by total size (`LogMaxTotalMegabytes`, default 5), oldest first; the newest file
   and the json files are never touched. Serilog's `retainedFileCountLimit` follows the same days. `System.Net.Http.HttpClient`
   is raised to Warning because its 4 lines per request were most of the volume.
 

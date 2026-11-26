@@ -18,6 +18,10 @@
 //       SYSTEM process to load.
 //     * It is killed when the allotted time is up, like the scheduled task's time limit was.
 //   If this fails, the caller falls back to the old scheduled-task route.
+//
+//   Nobody signed in (the login screen, e.g. after a restart) still counts: the screen is
+//   drawn in the console session by its own protected desktop ("Winlogon"), so the helper is
+//   started there and attaches itself to whichever desktop is showing (see InputDesktop).
 // =====================================================================================
 
 using System.ComponentModel;                // Win32Exception
@@ -31,7 +35,7 @@ namespace Orchestrator.Service.Services;
 
 /// <summary>What happened when we tried to start a helper on the user's desktop.</summary>
 /// <param name="Started">True when the process was created.</param>
-/// <param name="NobodyLoggedOn">True when there is no signed-in user to show anything to (so a fallback can't help either).</param>
+/// <param name="NobodyLoggedOn">True when there is no screen at all to show anything on (no console session exists yet), so a fallback can't help either.</param>
 /// <param name="Reason">Plain-language reason when it did not start.</param>
 public readonly record struct SessionLaunchResult(bool Started, bool NobodyLoggedOn, string? Reason);
 
@@ -43,7 +47,13 @@ public static class UserSessionLauncher
     public static string BuildCommandLine(string exe, string arguments)
         => string.IsNullOrWhiteSpace(arguments) ? $"\"{exe}\"" : $"\"{exe}\" {arguments}";
 
-    /// <summary>Start <paramref name="exe"/> with <paramref name="arguments"/> on the active user's desktop.
+    /// <summary>The desktop to start the helper on: the user's normal one when someone is signed in, the
+    /// login screen's own protected desktop when nobody is. (It follows the screen from there; see InputDesktop.)
+    /// Pure, so it is unit-tested.</summary>
+    public static string DesktopFor(bool userSignedIn) => userSignedIn ? "winsta0\\default" : "winsta0\\winlogon";
+
+    /// <summary>Start <paramref name="exe"/> with <paramref name="arguments"/> on the active user's desktop,
+    /// or on the login screen when nobody is signed in.
     /// It is killed after <paramref name="killAfter"/>. <paramref name="label"/> names it in the log
     /// (never put secrets in it: the arguments themselves are deliberately not logged).</summary>
     public static SessionLaunchResult TryLaunch(string exe, string arguments, TimeSpan killAfter, string label, ILogger log)
@@ -52,7 +62,9 @@ public static class UserSessionLauncher
 
         var sessionId = FindUserSession(out var userName);
         if (sessionId is null)
-            return new(false, true, "no user is signed in");
+            return new(false, true, "there is no console session (nothing is on the screen yet)");
+        var userSignedIn = userName.Length > 0;
+        if (!userSignedIn) userName = "(login screen)";
 
         IntPtr processToken = IntPtr.Zero, systemToken = IntPtr.Zero, env = IntPtr.Zero;
         try
@@ -71,7 +83,7 @@ public static class UserSessionLauncher
             // 3. SYSTEM's own environment (see the header for why not the user's).
             if (!CreateEnvironmentBlock(out env, systemToken, false)) env = IntPtr.Zero;   // none = inherit; still works
 
-            var si = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = "winsta0\\default" };
+            var si = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = DesktopFor(userSignedIn) };
             var cmd = new StringBuilder(BuildCommandLine(exe, arguments));   // CreateProcessAsUser may edit this buffer
             var flags = CREATE_NO_WINDOW | (env != IntPtr.Zero ? CREATE_UNICODE_ENVIRONMENT : 0u);
             if (!CreateProcessAsUserW(systemToken, null, cmd, IntPtr.Zero, IntPtr.Zero, false, flags, env,
@@ -80,8 +92,8 @@ public static class UserSessionLauncher
 
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
-            log.LogInformation("{Label}: started on {User}'s desktop (session {Session}, process {Pid}), ends within {Minutes} min",
-                label, userName, session, pi.dwProcessId, (int)killAfter.TotalMinutes);
+            log.LogInformation("{Label}: started on {User} desktop (session {Session}, process {Pid}), ends within {Minutes} min",
+                label, userSignedIn ? userName + "'s" : userName, session, pi.dwProcessId, (int)killAfter.TotalMinutes);
             WatchAsync((int)pi.dwProcessId, killAfter, label, log);
             return new(true, false, null);
         }
@@ -134,7 +146,8 @@ public static class UserSessionLauncher
     // ---- which session to use ---------------------------------------------------------------
 
     /// <summary>The console session if someone is signed in there, otherwise the first active
-    /// (remote-desktop) session that has a user. Null when nobody is signed in.</summary>
+    /// (remote-desktop) session that has a user, otherwise the console session itself (it is showing the
+    /// login screen; <paramref name="userName"/> is then empty). Null only when there is no console session.</summary>
     private static uint? FindUserSession(out string userName)
     {
         userName = "";
@@ -163,7 +176,8 @@ public static class UserSessionLauncher
             }
             finally { WTSFreeMemory(list); }
         }
-        return null;
+        // Nobody is signed in anywhere: the login screen lives in the console session.
+        return console != InvalidSession ? console : null;
     }
 
     private static string? QueryUser(uint sessionId)
