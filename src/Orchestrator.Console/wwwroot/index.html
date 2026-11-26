@@ -562,7 +562,7 @@
         }
         if (m.mac) {
           grid.append(el('button', { type: 'button', textContent: 'Wake',
-            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => sendWake([m.machineId]) }));
+            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => { if (confirm(`Wake "${m.label || m.hostname}" with Wake-on-LAN?`)) sendWake([m.machineId]); } }));
         }
         if (m.lastScreenshotUtc) {
           grid.append(el('a', {
@@ -844,6 +844,7 @@
 
     // Request a screenshot capture from a machine (captured on its next sync).
     async function requestScreenshot(m) {
+      if (!confirm(`Take a screenshot of "${m.label || m.hostname}"?\n\nIt is captured on the machine's next sync.`)) return;
       try {
         const r = await fetch('/api/screenshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
@@ -857,6 +858,8 @@
     // Start a live remote-control session: queues the request, then opens the viewer tab
     // (it shows "waiting for the agent" until that machine's next sync picks the request up).
     async function startRemoteSession(m) {
+      // Ask first, still inside the click: the confirm box is synchronous, so the window below still opens as part of the click.
+      if (!confirm(`Start a live remote session on "${m.label || m.hostname}"?\n\nYou will see and control its screen until the session ends or you press End session.`)) return;
       // Open the viewer window NOW, inside the click. Setting up a session takes several seconds (it is
       // published through GitHub), and a browser only lets a click open a window for a few seconds
       // afterwards: opened after the wait, it is silently blocked and the operator sees nothing happen.
