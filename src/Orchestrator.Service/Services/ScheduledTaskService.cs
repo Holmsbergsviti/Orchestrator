@@ -203,11 +203,42 @@ public sealed class ScheduledTaskService : IScheduledTaskService
                 throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
             _log.LogInformation("remote-session '{Id}': scheduled interactive session as {User} at {Time:HH:mm:ss} (max {Max}min)",
                 sessionId, user, start, (int)maxDuration.TotalMinutes);
+            LogTaskOutcomeLater(taskName, sessionId);   // so a session that never starts leaves a reason in the log
         }
         finally
         {
             try { File.Delete(tmp); } catch { /* best effort */ }
         }
+    }
+
+    /// <summary>The session starts in the user's desktop, where its own log lines may never reach us, so a
+    /// session that fails to start used to leave nothing at all. Shortly after it was due, ask Task Scheduler
+    /// what became of it (status, last run time, last result code) and write that to the service log.</summary>
+    private void LogTaskOutcomeLater(string taskName, string sessionId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(40));   // the task is due 15 s after it was made
+                var (code, output) = RunSchtasks("/Query", "/TN", taskName, "/V", "/FO", "LIST");
+                if (code != 0)
+                {
+                    // Gone already is the normal case for a session that ran and finished (the task deletes itself).
+                    _log.LogInformation("remote-session '{Id}': its scheduled task is no longer listed (schtasks exit {Code}) - it ran and finished, or was removed", sessionId, code);
+                    return;
+                }
+                var wanted = output.Split('\n')
+                    .Select(l => l.Trim())
+                    .Where(l => l.StartsWith("Status:") || l.StartsWith("Last Run Time:") || l.StartsWith("Last Result:") || l.StartsWith("Run As User:"))
+                    .Select(l => System.Text.RegularExpressions.Regex.Replace(l, @"\s+", " "));
+                _log.LogInformation("remote-session '{Id}': task state after start: {State}", sessionId, string.Join(" | ", wanted));
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "remote-session '{Id}': could not read the task state", sessionId);
+            }
+        });
     }
 
     public void RunSystemOnce(string taskName, string command, string arguments, TimeSpan delay)

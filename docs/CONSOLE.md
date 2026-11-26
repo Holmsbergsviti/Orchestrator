@@ -136,6 +136,10 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
     canvas and it happens over there. While **Input: on**, this tab also swallows your own
     browser shortcuts (Ctrl+W, F5, Ctrl+T) so they go to the remote machine instead — switch
     to **Input: off** to get your browser back without ending the session.
+  - **Full screen** makes the viewer full screen and, in Chrome or Edge, hands it your whole
+    keyboard (Ctrl+W, Ctrl+T, Alt+Tab and so on), which the page can't otherwise keep from the
+    browser. Hold **Esc** to leave. Keys the operating system keeps for itself (on a Mac, Cmd+Tab and
+    Cmd+Q) still can't be captured by any web page.
   - Input can't reach an elevated window, a UAC prompt, or the lock screen. Windows blocks
     synthetic input to those on purpose; the screen keeps streaming, clicks just do nothing.
   - Anything still held down (a modifier, a mouse button) is released automatically when the

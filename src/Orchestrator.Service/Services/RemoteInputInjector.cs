@@ -38,6 +38,7 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
     private readonly ILogger<RemoteInputInjector> _log;
     private readonly HashSet<ushort> _heldKeys = new();       // virtual-key codes currently down
     private readonly HashSet<string> _heldButtons = new();    // "left"/"right"/"middle" currently down
+    private bool _warnedBlocked;                             // log the first blocked SendInput as a warning, not every one
     private readonly object _lock = new();                    // events arrive on the WS receive loop; ReleaseAll from teardown
 
     public RemoteInputInjector(ILogger<RemoteInputInjector> log) => _log = log;
@@ -183,9 +184,17 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
     {
         var sent = SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
         if (sent == 0)
+        {
             // Usually UIPI: a service-launched process can't inject into an elevated window, and
             // nothing can inject into the secure desktop (UAC prompt, Ctrl+Alt+Del, lock screen).
-            _log.LogDebug("remote input: SendInput was blocked (win32 error {Error})", Marshal.GetLastWin32Error());
+            var error = Marshal.GetLastWin32Error();
+            _log.LogDebug("remote input: SendInput was blocked (win32 error {Error})", error);
+            if (!_warnedBlocked)   // once per session at a visible level: it is the answer to "why does input do nothing"
+            {
+                _warnedBlocked = true;
+                _log.LogWarning("remote input: Windows blocked injected input (win32 error {Error}). Usual cause: the window in front is elevated or a UAC/secure screen is showing.", error);
+            }
+        }
     }
 
     // ---- key mapping ----------------------------------------------------------------------
