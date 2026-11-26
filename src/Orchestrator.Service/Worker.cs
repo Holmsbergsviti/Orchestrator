@@ -71,7 +71,7 @@ public sealed class Worker : BackgroundService   // BackgroundService = a long-r
                 _log.LogError(ex, "Unhandled sync error");  // log and keep going
             }
 
-            _log.LogInformation("Next sync in {Min} minutes ({Time:u})",
+            _log.LogDebug("Next sync in {Min} minutes ({Time:u})",
                 _config.SyncIntervalMinutes, DateTimeOffset.Now.Add(interval));  // announce when the next sync will be
 
             try

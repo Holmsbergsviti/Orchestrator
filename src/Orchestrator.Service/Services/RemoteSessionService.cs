@@ -1,7 +1,7 @@
 // =====================================================================================
 // FILE PURPOSE (in plain terms):
-//   Runs ONE live remote-control session end-to-end: shows the mandatory on-screen banner
-//   (SessionBanner) on a dedicated UI thread, opens an outbound WebSocket to the console's
+//   Runs ONE live remote-control session end-to-end: optionally shows the on-screen banner
+//   (SessionBanner, only when ShowSessionBanner is on) on a dedicated UI thread, opens an outbound WebSocket to the console's
 //   relay, and loops capturing the screen (reusing ScreenCaptureService) and sending each
 //   frame while the session is active. This is the interactive, long-running counterpart to
 //   ScreenshotService's one-shot capture-and-upload. It runs both directions at once: frames
@@ -11,11 +11,9 @@
 //   whole session; there's no path that keeps streaming or injecting input after that, and
 //   anything still held down is released on the way out.
 //
-//   Failures are made VISIBLE rather than silent: the banner comes up before the connection
-//   is attempted and, if the session can't start, stays up for a few seconds showing why.
-//   This process runs in the logged-on user's session, so that banner is the only feedback
-//   channel it has to a human — the operator at the console just sees "no frames", and the
-//   log file lives on a machine they may not be sitting at.
+//   Failures are made VISIBLE rather than silent: the banner (when on) comes up before the
+//   connection is attempted and, if the session can't start, stays up for a few seconds showing
+//   why; the reason also goes to the agent log, which the console shows through its "Log" link.
 // =====================================================================================
 
 using System.Diagnostics;             // Stopwatch (frame pacing)

@@ -28,12 +28,11 @@ public interface IScheduledTaskService   // the contract for scheduled-task hand
     /// <summary>Run a program ONCE, soon, in the interactive logged-on user's session (for "run now").</summary>
     void RunInteractiveOnce(ProgramEntry program);
 
-    /// <summary>Capture a screenshot ONCE, soon, in the interactive logged-on user's session
-    /// (the service itself runs in session 0, with no desktop to capture).</summary>
+    /// <summary>Capture a screenshot ONCE, soon, on the PC's screen (the service itself runs in session 0, with no desktop to capture).</summary>
     void RunInteractiveScreenshotOnce(string requestId);
 
-    /// <summary>Start a live remote-control session, soon, in the interactive logged-on user's
-    /// session, for up to <paramref name="maxDuration"/> before it's force-ended.</summary>
+    /// <summary>Start a live remote-control session, soon, on the PC's screen, for up to
+    /// <paramref name="maxDuration"/> (plus a buffer) before it's force-ended.</summary>
     /// <param name="relayUrl">Where to dial, when the signed relay hint named it; null = use the configured address.</param>
     /// <param name="relayThumbprint">The certificate to pin for that address (empty = normal validation).</param>
     void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration, string? relayUrl = null, string? relayThumbprint = null, string? relayKey = null);
@@ -134,49 +133,14 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     public void RunInteractiveScreenshotOnce(string requestId)
     {
         var exe = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
-
-        // First choice: start it from this service, on the user's desktop. Works for every kind of account.
-        if (TryStartFromService(exe, $"capture-screenshot {requestId}", TimeSpan.FromMinutes(5), $"screenshot '{requestId}'", out var nobody))
-            return;
-        if (nobody)
-        {
-            _log.LogWarning("screenshot '{Id}': the PC has no console session to capture — cannot capture; skipping", requestId);
-            return;
-        }
-
-        // Fallback: the old scheduled task run as the logged-in user (only works if that user may run the agent).
-        var user = GetInteractiveUser();
-        if (string.IsNullOrWhiteSpace(user))
-        {
-            _log.LogWarning("screenshot '{Id}': no interactive user is logged on — cannot capture; skipping", requestId);
-            return;   // nothing to attach an interactive process to
-        }
-
-        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
-        var taskName = _config.RegistryEntryPrefix + "screenshot_" + requestId;
-        var xml = BuildInteractiveCaptureXml(exe, $"capture-screenshot {requestId}", user, start);
-
-        var tmp = Path.Combine(Path.GetTempPath(), $"orch-shot-{Guid.NewGuid():N}.xml");
-        File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
-        try
-        {
-            var (code, output) = RunSchtasks("/Create", "/TN", taskName, "/XML", tmp, "/F");
-            if (code != 0)
-                throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
-            _log.LogInformation("screenshot '{Id}': scheduled interactive capture as {User} at {Time:HH:mm:ss}", requestId, user, start);
-        }
-        finally
-        {
-            try { File.Delete(tmp); } catch { /* best effort */ }
-        }
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path.");
+        StartOnConsole(exe, $"capture-screenshot {requestId}", TimeSpan.FromMinutes(5), $"screenshot '{requestId}'");
     }
 
     public void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration, string? relayUrl = null, string? relayThumbprint = null, string? relayKey = null)
     {
         var exe = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
-        var taskName = _config.RegistryEntryPrefix + "session_" + sessionId;
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path.");
         // The proof (hex) is passed straight through to the session process, which presents
         // it to the relay. It's bound to this machine and this session, so it's no use to
         // anyone who reads it off the task definition.
@@ -196,83 +160,17 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             if (!string.IsNullOrEmpty(relayKey)) args += $" {relayKey}";
         }
 
-        // First choice: start it from this service, on the user's desktop. Works for every kind of account.
         // (The arguments are never logged: they carry the proof and, for tunnel sessions, the encryption key.)
-        if (TryStartFromService(exe, args, maxDuration + TimeSpan.FromMinutes(15), $"remote-session '{sessionId}'", out var nobody))
-            return;
-        if (nobody)
-        {
-            _log.LogWarning("remote-session '{Id}': the PC has no console session to show a screen on — cannot start; skipping", sessionId);
-            return;
-        }
-
-        // Fallback: the old scheduled task run as the logged-in user (only works if that user may run the agent).
-        var user = GetInteractiveUser();
-        if (string.IsNullOrWhiteSpace(user))
-        {
-            _log.LogWarning("remote-session '{Id}': no interactive user is logged on — cannot start; skipping", sessionId);
-            return;   // nothing to attach an interactive process to
-        }
-        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
-        var xml = BuildInteractiveSessionXml(exe, args, user, start, maxDuration);
-
-        var tmp = Path.Combine(Path.GetTempPath(), $"orch-session-{Guid.NewGuid():N}.xml");
-        File.WriteAllText(tmp, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
-        try
-        {
-            var (code, output) = RunSchtasks("/Create", "/TN", taskName, "/XML", tmp, "/F");
-            if (code != 0)
-                throw new InvalidOperationException($"schtasks /Create failed (exit {code}) for '{taskName}': {output}");
-            _log.LogInformation("remote-session '{Id}': scheduled interactive session as {User} at {Time:HH:mm:ss} (max {Max}min)",
-                sessionId, user, start, (int)maxDuration.TotalMinutes);
-            LogTaskOutcomeLater(taskName, sessionId);   // so a session that never starts leaves a reason in the log
-        }
-        finally
-        {
-            try { File.Delete(tmp); } catch { /* best effort */ }
-        }
+        StartOnConsole(exe, args, maxDuration + TimeSpan.FromMinutes(15), $"remote-session '{sessionId}'");
     }
 
-    /// <summary>Try the service-launched route (see <see cref="UserSessionLauncher"/>). True when the helper is
-    /// running. <paramref name="nobodyLoggedOn"/> is true when there is nobody to show it to, so no fallback can work.
-    /// Off when <c>LaunchSessionsAsSystem</c> is false.</summary>
-    private bool TryStartFromService(string exe, string arguments, TimeSpan killAfter, string label, out bool nobodyLoggedOn)
+    /// <summary>Start the helper from this service on the screen that is showing (the signed-in user's desktop, or the
+    /// login screen), see <see cref="UserSessionLauncher"/>. A failure is logged; the next request simply tries again.</summary>
+    private void StartOnConsole(string exe, string arguments, TimeSpan killAfter, string label)
     {
-        nobodyLoggedOn = false;
-        if (!_config.LaunchSessionsAsSystem) return false;
         var result = UserSessionLauncher.TryLaunch(exe, arguments, killAfter, label, _log);
-        nobodyLoggedOn = result.NobodyLoggedOn;
-        return result.Started;
-    }
-
-    /// <summary>The session starts in the user's desktop, where its own log lines may never reach us, so a
-    /// session that fails to start used to leave nothing at all. Shortly after it was due, ask Task Scheduler
-    /// what became of it (status, last run time, last result code) and write that to the service log.</summary>
-    private void LogTaskOutcomeLater(string taskName, string sessionId)
-    {
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(40));   // the task is due 15 s after it was made
-                var (code, output) = RunSchtasks("/Query", "/TN", taskName, "/V", "/FO", "LIST");
-                if (code != 0)
-                {
-                    // Gone already is the normal case for a session that ran and finished (the task deletes itself).
-                    _log.LogInformation("remote-session '{Id}': its scheduled task is no longer listed (schtasks exit {Code}) - it ran and finished, or was removed", sessionId, code);
-                    return;
-                }
-                var wanted = output.Split('\n')
-                    .Select(l => l.Trim())
-                    .Where(l => l.StartsWith("Status:") || l.StartsWith("Last Run Time:") || l.StartsWith("Last Result:") || l.StartsWith("Run As User:"))
-                    .Select(l => System.Text.RegularExpressions.Regex.Replace(l, @"\s+", " "));
-                _log.LogInformation("remote-session '{Id}': task state after start: {State}", sessionId, string.Join(" | ", wanted));
-            }
-            catch (Exception ex)
-            {
-                _log.LogDebug(ex, "remote-session '{Id}': could not read the task state", sessionId);
-            }
-        });
+        if (!result.Started && result.NobodyLoggedOn)
+            _log.LogWarning("{Label}: the PC has no console session to show a screen on yet, skipping", label);
     }
 
     public void RunSystemOnce(string taskName, string command, string arguments, TimeSpan delay)
@@ -401,33 +299,6 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             $"Orchestrator one-time interactive run of {program.Name}",
             execCommand, execArguments, program.InstallPath, userId, start,
             endWindow: TimeSpan.FromMinutes(10), execLimit: TimeSpan.FromHours(1));
-
-    /// <summary>
-    /// Build a Task Scheduler 1.2 XML doc that runs a screenshot capture ONCE at <paramref name="start"/>
-    /// in the given user's interactive session, then deletes itself. Pure/testable. No working directory —
-    /// the capture verb doesn't need one (it isn't launching a program from an install folder).
-    /// </summary>
-    public static string BuildInteractiveCaptureXml(string execCommand, string execArguments, string userId, DateTime start)
-        => BuildInteractiveOnceXmlCore(
-            "Orchestrator one-time interactive screenshot capture",
-            execCommand, execArguments, workingDir: null, userId, start,
-            endWindow: TimeSpan.FromMinutes(10), execLimit: TimeSpan.FromHours(1));
-
-    /// <summary>
-    /// Build a Task Scheduler 1.2 XML doc that runs a live remote-control session starting at
-    /// <paramref name="start"/> in the given user's interactive session, for up to
-    /// <paramref name="maxDuration"/> (plus a small buffer) before Task Scheduler force-ends it as
-    /// a backstop — the session process itself is expected to stop on its own well before that,
-    /// via its own timeout/cancellation. Pure/testable.
-    /// </summary>
-    public static string BuildInteractiveSessionXml(string execCommand, string execArguments, string userId, DateTime start, TimeSpan maxDuration)
-    {
-        var window = maxDuration + TimeSpan.FromMinutes(15);   // buffer so Task Scheduler never cuts off a healthy session early
-        return BuildInteractiveOnceXmlCore(
-            "Orchestrator remote-control session",
-            execCommand, execArguments, workingDir: null, userId, start,
-            endWindow: window, execLimit: window);
-    }
 
     /// <summary>
     /// Build a Task Scheduler 1.2 XML doc that runs a command ONCE at <paramref name="start"/> as

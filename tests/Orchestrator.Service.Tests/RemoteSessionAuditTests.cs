@@ -1,15 +1,11 @@
 // =====================================================================================
 // FILE PURPOSE (in plain terms):
-//   Automated checks for the remote-control audit trail and the scheduled-task XML that
-//   launches a session. The audit checks are about the bounded ring: an audit log that
-//   silently drops the newest entry, or grows without limit, is worse than none. The XML
-//   checks confirm a session task is allowed to run long enough for a fully renewed session
-//   rather than being cut off by Task Scheduler partway through.
+//   Automated checks for the remote-control audit trail. They are about the bounded ring: an
+//   audit log that silently drops the newest entry, or grows without limit, is worse than none.
 // =====================================================================================
 
 using System.Text.Json;                // round-tripping the audit file
 using Orchestrator.Service.Models;     // the code being tested
-using Orchestrator.Service.Services;   // ScheduledTaskService XML builders
 using Xunit;                           // the test framework
 
 namespace Orchestrator.Service.Tests;
@@ -69,38 +65,5 @@ public sealed class RemoteSessionAuditTests
         Assert.Equal(42, r.InputEvents);
         Assert.Equal(2, r.Renewals);
         Assert.Equal("operator", r.Outcome);
-    }
-}
-
-public sealed class RemoteSessionScheduledTaskTests
-{
-    [Fact]
-    public void SessionTask_AllowsTheWholeRenewableWindowPlusABuffer()
-    {
-        // 30-minute grants with a 4-grant ceiling means a session can legitimately run two
-        // hours. If the task's own limit were sized to a single grant, Task Scheduler would
-        // kill a renewed session out from under the operator.
-        var absoluteMax = TimeSpan.FromMinutes(30) * OrchestratorConfig.MaxSessionGrants;
-        var xml = ScheduledTaskService.BuildInteractiveSessionXml(
-            @"C:\Windows\Orch\orchestrator-service.exe", "remote-session abc123",
-            "PC-1\\Alice", new DateTime(2026, 8, 4, 10, 0, 0), absoluteMax);
-
-        // 120 minutes of session + the builder's 15-minute buffer.
-        Assert.Contains("<ExecutionTimeLimit>PT135M</ExecutionTimeLimit>", xml);
-        Assert.Contains("<Arguments>remote-session abc123</Arguments>", xml);
-        Assert.Contains("<UserId>PC-1\\Alice</UserId>", xml);
-        Assert.Contains("<LogonType>InteractiveToken</LogonType>", xml);   // must land in the user's desktop session
-    }
-
-    [Fact]
-    public void SessionTask_IsWellFormedXml()
-    {
-        var xml = ScheduledTaskService.BuildInteractiveSessionXml(
-            @"C:\Windows\Orch\orchestrator-service.exe", "remote-session abc123",
-            "PC-1\\Alice", new DateTime(2026, 8, 4, 10, 0, 0), TimeSpan.FromMinutes(30));
-
-        var doc = new System.Xml.XmlDocument();
-        doc.LoadXml(xml);   // throws if malformed
-        Assert.NotNull(doc.DocumentElement);
     }
 }

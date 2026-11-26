@@ -166,7 +166,7 @@ public sealed class FleetReporter : IFleetReporter
             await _github.PutFileAsync(path, Encoding.UTF8.GetBytes(text), branch,
                 $"log: {machine.Hostname} ({machine.MachineId}) {DateTimeOffset.UtcNow:O}", sha, ct);
             _lastLogUpload = DateTimeOffset.UtcNow;
-            _log.LogInformation("Uploaded log tail to {Branch}:{Path}", branch, path);
+            _log.LogDebug("Uploaded log tail to {Branch}:{Path}", branch, path);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)

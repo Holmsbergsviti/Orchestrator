@@ -41,7 +41,6 @@ public sealed class SelfUpdateService : ISelfUpdateService
     private readonly IGitHubClient _github;
     private readonly IChecksumService _checksums;
     private readonly IScheduledTaskService _scheduledTasks;
-    private readonly IConfigService _configService;
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<SelfUpdateService> _log;
     private readonly OrchestratorConfig _config;
@@ -60,7 +59,6 @@ public sealed class SelfUpdateService : ISelfUpdateService
         _github = github;
         _checksums = checksums;
         _scheduledTasks = scheduledTasks;
-        _configService = configService;
         _httpFactory = httpFactory;
         _config = configService.Config;
         _log = log;
