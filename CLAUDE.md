@@ -204,6 +204,10 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
 - **Agent log upload.** Every `LogUploadMinutes` (default 2, checked once per sync, independent of the heartbeat's 30-minute cap) `FleetReporter` commits the tail of the
   newest `logs\log-*.txt` to `logs/<machineId>.txt` on `fleet-state` (`UploadLogs`, default on); the console serves it at
   `GET /api/log/{machineId}` (the "Log" link). Forget removes it too.
+  **On-PC log retention (`LogRetention`).** The agent's own `logs\log-*.txt` are trimmed at startup and every ~6 h by age
+  (`LogRetentionDays`, default 14) then by total size (`LogMaxTotalMegabytes`, default 200), oldest first; the newest file
+  and the json files are never touched. Serilog's `retainedFileCountLimit` follows the same days. `System.Net.Http.HttpClient`
+  is raised to Warning because its 4 lines per request were most of the volume.
 
 - **Removing a machine.** "Forget" (`ControlRepo.ForgetMachineAsync`) deletes `state/<id>.json` and
   `screenshots/<id>` from the `fleet-state` branch via a scratch clone (`GitRepo.RemovePathsOnRemoteBranchAsync`;

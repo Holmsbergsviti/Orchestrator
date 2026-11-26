@@ -5,7 +5,7 @@
 -->
 # Troubleshooting
 
-Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day). The service and any interactive
+Logs: `C:\Windows\Orch\logs\log-YYYY-MM-DD.txt` (one per day; files older than `LogRetentionDays`, default 14, and the oldest beyond `LogMaxTotalMegabytes`, default 200, are deleted automatically). The service and any interactive
 process it launches (run-now, screenshot, remote session) all write here, tagged by process id.
 Structured history: `C:\Windows\Orch\logs\sync-history.json`.
 Remote-control audit trail: `C:\Windows\Orch\logs\remote-sessions.json`.

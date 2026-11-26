@@ -66,13 +66,16 @@ public static class ServiceRegistration
             var logDir = conf.LogsPath;
             Directory.CreateDirectory(logDir);
             cfg.MinimumLevel.Information()
+               // Each web request logs 4 lines ("Start processing", "Sending", "Received", "End processing");
+               // they made up most of the file and say nothing the sync's own lines don't. Warnings stay.
+               .MinimumLevel.Override("System.Net.Http.HttpClient", Serilog.Events.LogEventLevel.Warning)
                .Enrich.FromLogContext()
                .WriteTo.Console(
                    outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss}] {Message:lj}{NewLine}{Exception}")
                .WriteTo.File(
                    path: Path.Combine(logDir, "log-.txt"),
                    rollingInterval: RollingInterval.Day,
-                   retainedFileCountLimit: 90,
+                   retainedFileCountLimit: conf.LogRetentionDays > 0 ? conf.LogRetentionDays + 1 : null,   // one file a day; LogRetention also trims by size
                    // shared:true matters more than it looks. Several of our processes log at
                    // once — the service in session 0 plus whatever interactive verb it launched
                    // (run-program, capture-screenshot, remote-session). Without this the service
