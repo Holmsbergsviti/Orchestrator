@@ -85,6 +85,8 @@ public sealed class MachineView
     /// <summary>SHA-256 of the exe this machine is running, so the UI can tell which machines
     /// have picked up the published build and which are lagging or stuck.</summary>
     public string? AgentSha256 { get; set; }
+    /// <summary>Antivirus products the PC reports (empty for an agent that predates this field).</summary>
+    public List<string> Antivirus { get; set; } = new();
     public string? LastSeenUtc { get; set; }
     public bool Online { get; set; }
     public bool LastSyncSuccess { get; set; }
@@ -246,6 +248,7 @@ internal sealed class HeartbeatFile
     [JsonPropertyName("os")] public string? Os { get; set; }
     [JsonPropertyName("agentVersion")] public string? AgentVersion { get; set; }
     [JsonPropertyName("agentSha256")] public string? AgentSha256 { get; set; }
+    [JsonPropertyName("antivirus")] public List<string>? Antivirus { get; set; }
     [JsonPropertyName("lastSeenUtc")] public string? LastSeenUtc { get; set; }
     [JsonPropertyName("syncIntervalMinutes")] public int SyncIntervalMinutes { get; set; }
     [JsonPropertyName("heartbeatMaxIntervalMinutes")] public int HeartbeatMaxIntervalMinutes { get; set; }   // 0 = older agent
@@ -1388,6 +1391,7 @@ public sealed class ControlRepo
             Os = hb.Os,
             AgentVersion = hb.AgentVersion,
             AgentSha256 = hb.AgentSha256,
+            Antivirus = hb.Antivirus ?? new List<string>(),
             LastSeenUtc = hb.LastSeenUtc,
             Online = IsOnline(hb),
             LastSyncSuccess = hb.LastSyncSuccess,

@@ -91,6 +91,13 @@
     .flags label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 12px; }
     .addgrid .full { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
     .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    /* Page tabs: one section at a time instead of one long scroll. */
+    .tabs { display: flex; gap: 0; margin-bottom: 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    .tabs button { border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; background: transparent;
+                   padding: 8px 18px; margin-bottom: -1px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .tabs button:hover { box-shadow: none; color: var(--accent); }
+    .tabs button.active { background: var(--card); border-color: var(--line); color: var(--accent); text-shadow: var(--glow); font-weight: 700; }
+    [data-tab][hidden] { display: none; }
     .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
     .seg button { border: none; border-radius: 0; padding: 6px 13px; background: rgba(0, 0, 0, .55); }
     .seg button:hover { box-shadow: none; }
@@ -153,6 +160,16 @@
     #removeDlg .choice { display: grid; gap: 4px; margin: 14px 0; }
     #removeDlg .choice small { color: var(--muted); }
     #removeDlg .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    /* Antivirus dialog: same box look, calmer border since it's informational, not a danger action. */
+    #avDlg { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+             padding: 20px; background: rgba(0, 0, 0, .85); }
+    #avDlg[hidden] { display: none; }
+    #avDlg .box { max-width: 480px; width: 100%; max-height: 90vh; overflow: auto; padding: 24px 28px;
+                  background: #050a06; border: 2px solid var(--accent); box-shadow: var(--glow); }
+    #avDlg h2 { margin: 0 0 8px; color: var(--accent); font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
+    #avDlg ul { margin: 14px 0; padding-left: 20px; }
+    #avDlg li.other { color: var(--warn); }
+    #avDlg .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
     /* "New version" flag: a loud bar across the top whenever GitHub has newer console code, and a
        full-screen overlay (until updated) that stops the page being used on an old version. */
     #upgradeBar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px;
@@ -203,6 +220,18 @@
       <div class="actions"><button id="removeCancel">Cancel</button></div>
     </div>
   </div>
+  <div id="avDlg" hidden role="dialog" aria-modal="true" aria-labelledby="avTitle">
+    <div class="box">
+      <h2 id="avTitle">Antivirus</h2>
+      <p id="avWho"></p>
+      <ul id="avList"></ul>
+      <p class="muted" id="avEmpty" hidden>Windows Security Center reports none on this machine.</p>
+      <small class="muted">Read-only, reported by Windows Security Center. Anything other than Windows' own
+        Defender is highlighted — often a previous owner's leftover on a second-hand PC.</small>
+      <div class="actions"><button id="avClose">Close</button></div>
+    </div>
+  </div>
+
   <div id="upgradeBar" hidden role="alert">
     <span class="grow" id="upgradeBarText"></span>
     <button id="upgradeBarBtn" class="primary">Update now</button>
@@ -232,7 +261,14 @@
   <main>
     <div id="warnings"></div>
 
-    <div class="card">
+    <nav class="tabs" id="tabs" role="tablist">
+      <button type="button" role="tab" data-go="machines">Machines</button>
+      <button type="button" role="tab" data-go="activity">Activity</button>
+      <button type="button" role="tab" data-go="targeting">Targeting</button>
+      <button type="button" role="tab" data-go="add">Add program</button>
+    </nav>
+
+    <div class="card" data-tab="machines">
       <h2>Machines <button type="button" id="wakeAll" style="margin-left:10px; font-size:12px; padding:4px 10px">Wake all</button></h2>
       <div class="scroll">
         <table id="machines">
@@ -248,7 +284,7 @@
       <div class="empty" id="noMachines" hidden>No machines have reported yet.</div>
     </div>
 
-    <div class="card" id="activityCard">
+    <div class="card" id="activityCard" data-tab="activity">
       <h2>Activity
         <select id="actFilter" title="Show one machine only" style="margin-left:10px; font-size:12px; padding:3px 6px"></select>
         <button type="button" id="actReload" style="margin-left:6px; font-size:12px; padding:4px 10px">Refresh</button>
@@ -264,7 +300,7 @@
       <div style="margin-top:8px"><button type="button" id="actMore" hidden style="font-size:12px; padding:4px 10px">Show more</button></div>
     </div>
 
-    <div class="card">
+    <div class="card" data-tab="targeting">
       <h2>Targeting</h2>
       <div class="toolbar">
         <div class="seg" id="viewSeg">
@@ -277,8 +313,8 @@
       <div id="tview"></div>
     </div>
 
-    <div class="card">
-      <details class="add">
+    <div class="card" data-tab="add">
+      <details class="add" open>
         <summary>Add a program</summary>
         <div class="addgrid">
           <label for="a-name">Name *</label>
@@ -513,6 +549,23 @@
       renderTargeting();
     }
 
+    // Antivirus dialog: full list for one machine, opened from its "AV (N)" button.
+    function openAv(m) {
+      $('#avWho').textContent = `${m.label || m.hostname} (${m.hostname})`;
+      const list = $('#avList'); list.innerHTML = '';
+      const av = m.antivirus || [];
+      for (const name of av) {
+        const other = !/defender|windows security/i.test(name);
+        list.append(el('li', { className: other ? 'other' : '', textContent: name + (other ? ' (not Windows Defender)' : '') }));
+      }
+      $('#avEmpty').hidden = av.length > 0;
+      $('#avDlg').hidden = false;
+    }
+    function closeAv() { $('#avDlg').hidden = true; }
+    $('#avClose').onclick = closeAv;
+    $('#avDlg').addEventListener('click', e => { if (e.target.id === 'avDlg') closeAv(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#avDlg').hidden) closeAv(); });
+
     function renderMachines() {
       const tb = $('#machines tbody'); tb.innerHTML = '';
       $('#noMachines').hidden = state.machines.length > 0;
@@ -529,7 +582,10 @@
           ? el('span', { className: 'pill ok', textContent: 'ok' })
           : el('span', { className: 'pill bad', title: m.lastError || '', textContent: 'error' });
         const power = el('td', {}, []);
+        const avCount = (m.antivirus || []).length;
         const grid = el('div', { className: 'power' }, [
+          ...(avCount > 0 ? [el('button', { type: 'button', textContent: `AV (${avCount})`,
+            title: 'Antivirus Windows Security Center reports on this PC (read-only)', onclick: () => openAv(m) })] : []),
           el('button', { type: 'button', textContent: 'Shut down', title: 'Power off this machine on its next sync',
             onclick: () => sendCommand(m, 'shutdown') }),
           el('button', { type: 'button', textContent: 'Restart', title: 'Reboot this machine on its next sync',
@@ -548,7 +604,7 @@
         }
         if (m.mac) {
           grid.append(el('button', { type: 'button', textContent: 'Wake',
-            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => sendWake([m.machineId]) }));
+            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => { if (confirm(`Wake "${m.label || m.hostname}" with Wake-on-LAN?`)) sendWake([m.machineId]); } }));
         }
         if (m.lastScreenshotUtc) {
           grid.append(el('a', {
@@ -830,6 +886,7 @@
 
     // Request a screenshot capture from a machine (captured on its next sync).
     async function requestScreenshot(m) {
+      if (!confirm(`Take a screenshot of "${m.label || m.hostname}"?\n\nIt is captured on the machine's next sync.`)) return;
       try {
         const r = await fetch('/api/screenshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
@@ -843,6 +900,8 @@
     // Start a live remote-control session: queues the request, then opens the viewer tab
     // (it shows "waiting for the agent" until that machine's next sync picks the request up).
     async function startRemoteSession(m) {
+      // Ask first, still inside the click: the confirm box is synchronous, so the window below still opens as part of the click.
+      if (!confirm(`Start a live remote session on "${m.label || m.hostname}"?\n\nYou will see and control its screen until the session ends or you press End session.`)) return;
       // Open the viewer window NOW, inside the click. Setting up a session takes several seconds (it is
       // published through GitHub), and a browser only lets a click open a window for a few seconds
       // afterwards: opened after the wait, it is silently blocked and the operator sees nothing happen.
@@ -1065,6 +1124,23 @@
     $('#upgradeSkip').onclick = () => { updateSkipped = true; renderUpdate(); };
     checkUpdate();
     setInterval(checkUpdate, 5 * 60 * 1000);   // a long-open tab still finds out
+
+    // Tabs: show one section at a time. The choice is remembered (and can be linked as #activity etc.).
+    const TABS = ['machines', 'activity', 'targeting', 'add'];
+    function showTab(name) {
+      if (!TABS.includes(name)) name = 'machines';
+      document.querySelectorAll('[data-tab]').forEach(el => { el.hidden = el.dataset.tab !== name; });
+      document.querySelectorAll('#tabs [data-go]').forEach(b => {
+        const on = b.dataset.go === name;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      try { localStorage.setItem('orch.tab', name); } catch { /* storage may be blocked */ }
+      if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+    }
+    document.querySelectorAll('#tabs [data-go]').forEach(b => { b.onclick = () => showTab(b.dataset.go); });
+    addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+    showTab(location.hash.slice(1) || (() => { try { return localStorage.getItem('orch.tab'); } catch { return null; } })() || 'machines');
 
     $('#reload').onclick = () => {
       if (dirty && !confirm('Discard unsaved changes and reload?')) return;
