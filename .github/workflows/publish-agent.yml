@@ -86,13 +86,27 @@ jobs:
           echo "public_key=$PUB" >> "$GITHUB_OUTPUT"
           echo "Signing with public key $PUB"
 
+      - name: Load the data-encryption public key
+        # Encrypts every heartbeat, log upload and screenshot to the operator's data key (see
+        # FleetDataEncryption.cs / DataEncryptionKeys.cs) so only their own console, never
+        # GitHub, can read them. Unlike AGENT_SIGNING_KEY this is the PUBLIC half only — it's
+        # a repo VARIABLE, not a secret, because a public key teaches nobody anything; the
+        # operator makes it (and keeps the private half) with the console's "data-key" command.
+        # Without it the build sends fleet data in the clear, same as before, and says so loudly.
+        run: |
+          if [ -z "${{ vars.AGENT_DATA_PUBLIC_KEY }}" ]; then
+            echo "::warning::AGENT_DATA_PUBLIC_KEY is not set: this build does NOT encrypt heartbeats, logs or screenshots. See docs/SETUP.md, 'Encrypt fleet data'."
+          fi
+
       - name: Publish the win-x64 agent
         env:
           SIGNING_PUBLIC_KEY: ${{ steps.signing.outputs.public_key }}
+          DATA_PUBLIC_KEY: ${{ vars.AGENT_DATA_PUBLIC_KEY }}
         run: |
           dotnet publish src/Orchestrator.Service/Orchestrator.Service.csproj \
             -c Release -r win-x64 --self-contained true -o publish \
-            ${SIGNING_PUBLIC_KEY:+-p:OrchestratorSigningKey=$SIGNING_PUBLIC_KEY}
+            ${SIGNING_PUBLIC_KEY:+-p:OrchestratorSigningKey=$SIGNING_PUBLIC_KEY} \
+            ${DATA_PUBLIC_KEY:+-p:OrchestratorDataPublicKey=$DATA_PUBLIC_KEY}
 
       - name: Compute the checksum
         id: hash
@@ -185,4 +199,9 @@ jobs:
             echo "Signed control files: **enforced** by this build." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Signed control files: **not enforced** (no AGENT_SIGNING_KEY secret)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "${{ vars.AGENT_DATA_PUBLIC_KEY }}" ]; then
+            echo "Fleet data (heartbeats/logs/screenshots): **encrypted** by this build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Fleet data (heartbeats/logs/screenshots): **not encrypted** (no AGENT_DATA_PUBLIC_KEY variable)." >> "$GITHUB_STEP_SUMMARY"
           fi

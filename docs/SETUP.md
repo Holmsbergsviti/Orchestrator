@@ -84,6 +84,41 @@ file, so you can tell your own edit from someone else's). The console also refus
 top of an unsigned change, because saving signs the whole file. Programs need a `checksum`
 in signed mode; the console's **Add a program** computes it for you.
 
+## 3b. Encrypt fleet data (strongly recommended)
+Signing (above) stops anyone from *commanding* your fleet with a stolen token. It does nothing
+about *reading* it: without this, every heartbeat (hostname, OS, antivirus list, MAC addresses),
+every uploaded log, and every screenshot sits as plain text/JPEG in your private control repo —
+readable by anyone who can read that repo, or that repo's token.
+
+How it works: your console holds a private key (on your computer, never in git, and a
+**separate** key from the signing one above — one key, one job). Its public half is baked into
+every agent build, the same way the signing key's public half is. From then on, an agent
+encrypts its heartbeat, its log upload and any screenshot to that public key before it ever
+reaches GitHub; only the private key on your computer can open them back up. An agent build
+without the key keeps sending plain data, so this rolls out gradually as machines update —
+nothing breaks on the way.
+
+Set it up once, whenever you like (unlike signing, there's no ordering requirement — it only
+affects what a build sends FROM THEN ON):
+
+1. On the computer you run the console on:
+   ```bash
+   dotnet run --project src/Orchestrator.Console -- data-key
+   ```
+   It creates the key (in your user profile, next to but separate from the signing key) and
+   prints its **public** half.
+2. In the **code** repo → Settings → Secrets and variables → Actions → **Variables** tab → **New
+   repository variable**: name `AGENT_DATA_PUBLIC_KEY`, value = the printed base64 (it's a
+   public key, so a repo *variable* is fine — it doesn't need to be a secret).
+3. Push/merge to `main` as usual. The workflow summary says "Fleet data: **encrypted**", and
+   machines encrypt to it from their next update onward.
+
+Back up the key file it printed the path of, same as the signing key — if you lose it, old
+encrypted heartbeats/logs/screenshots are unrecoverable (there's no way around that: nothing
+but this key can open them, including a replacement key). Losing it is NOT a fleet-wide
+emergency the way losing the signing key is, though: run step 1 on a new computer, repeat step
+2, and newly-uploaded data is readable again.
+
 ## 4. Install on each target (Administrator PowerShell)
 ```powershell
 .\scripts\install.ps1 `

@@ -83,6 +83,7 @@ public sealed class RelayHintTests : IDisposable
                hub ?? _hub,
                new RelayKeyStore(Path.Combine(_root, "pins.json"), NullLogger<RelayKeyStore>.Instance),
                new ControlSigning(_keyPath),
+               new DataEncryptionKeys(Path.Combine(_root, "data-key.pem")),
                NullLogger<ControlRepo>.Instance,
                advert);
 
@@ -291,7 +292,8 @@ public sealed class RelayHintTests : IDisposable
         var tunnel = new TunnelService(new ConsoleOptions(), NullLogger<TunnelService>.Instance);
         var console = new ControlRepo(new ConsoleOptions { ControlRepoPath = Mine, Remote = "origin", MainBranch = "main", SigningKeyPath = _keyPath },
             _hub, new RelayKeyStore(Path.Combine(_root, "pins.json"), NullLogger<RelayKeyStore>.Instance),
-            new ControlSigning(_keyPath), NullLogger<ControlRepo>.Instance, Advert, tunnel);
+            new ControlSigning(_keyPath), new DataEncryptionKeys(Path.Combine(_root, "data-key.pem")),
+            NullLogger<ControlRepo>.Instance, Advert, tunnel);
         Assert.True((await console.SignNowAsync(default)).Ok);
 
         tunnel.SetAdvert(new RelayAdvert("wss://quiet-fox-1234.trycloudflare.com", ""));
@@ -314,7 +316,8 @@ public sealed class RelayHintTests : IDisposable
         var tunnel = new TunnelService(new ConsoleOptions(), NullLogger<TunnelService>.Instance);   // never started: no address
         var console = new ControlRepo(new ConsoleOptions { ControlRepoPath = Mine, Remote = "origin", MainBranch = "main", SigningKeyPath = _keyPath },
             _hub, new RelayKeyStore(Path.Combine(_root, "pins.json"), NullLogger<RelayKeyStore>.Instance),
-            new ControlSigning(_keyPath), NullLogger<ControlRepo>.Instance, Advert, tunnel);
+            new ControlSigning(_keyPath), new DataEncryptionKeys(Path.Combine(_root, "data-key.pem")),
+            NullLogger<ControlRepo>.Instance, Advert, tunnel);
         Assert.True((await console.SignNowAsync(default)).Ok);
 
         var result = await console.StartRemoteSessionAsync("m1", default);

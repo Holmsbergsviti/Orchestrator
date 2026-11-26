@@ -80,7 +80,8 @@ public sealed class MachineRemovalTests : IDisposable
 
     private ControlRepo Console()
         => new(new ConsoleOptions { ControlRepoPath = Mine, Remote = "origin", MainBranch = "main", SigningKeyPath = _keyPath },
-               new RelayHub(NullLogger<RelayHub>.Instance), _keys, new ControlSigning(_keyPath), NullLogger<ControlRepo>.Instance);
+               new RelayHub(NullLogger<RelayHub>.Instance), _keys, new ControlSigning(_keyPath),
+               new DataEncryptionKeys(Path.Combine(_root, "data-key.pem")), NullLogger<ControlRepo>.Instance);
 
     [Fact]
     public async Task Forget_RemovesThatMachinesHeartbeatAndScreenshots_AndNobodyElses()

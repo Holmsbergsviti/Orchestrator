@@ -56,6 +56,7 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Console:FleetStateBranch` | Branch with the heartbeats | `fleet-state` |
 | `Console:OpenBrowser` | Open the browser on start | `true` |
 | `Console:SigningKeyPath` | Your private signing key for [signed control files](SETUP.md#3a-sign-the-control-files-strongly-recommended) | *(your user profile; made by `-- signing-key`)* |
+| `Console:DataKeyPath` | Your private key for [encrypted fleet data](SETUP.md#3b-encrypt-fleet-data-strongly-recommended) — heartbeats, logs, screenshots | *(your user profile; made by `-- data-key`)* |
 | `Console:RelayAdvertiseUrl` | The `ws(s)://` address PCs should dial for live screen sessions, if not this computer's name + the port in `Urls` | *(worked out)* |
 | `Console:Tunnel` | Start a free Cloudflare quick tunnel so PCs on **other networks** can reach the live screen relay without your address being shared ([details](SETUP.md#b-tell-the-agents-where-it-is)) | `false` |
 | `Console:TunnelCommand` | The `cloudflared` program, as a full path if it isn't on `PATH` | `cloudflared` |
@@ -149,6 +150,13 @@ The tab you were on is remembered across reloads, and a link such as `http://loc
     picture shows them and typing/clicking works there, because the helper runs as SYSTEM and
     attaches to whichever desktop is showing (`InputDesktop`). The red banner moves along with it.
     Ctrl+Alt+Del itself can't be sent (Windows only accepts it from the real keyboard).
+  - **Clipboard** opens a small panel: type or paste text there and press **Send & paste** to type
+    it into whatever has focus on the remote machine (it sets that machine's clipboard and sends
+    Ctrl+V), or press **Copy from remote** to pull its clipboard text back into yours. Ctrl+C/Ctrl+V
+    on the canvas itself are just forwarded as keystrokes like any other key — they work *within*
+    the remote machine, but don't move anything between your computer's clipboard and its, which is
+    what this panel is for. Typing in the panel's own text box stays on this page and is never sent
+    as remote keystrokes.
   - Anything still held down (a modifier, a mouse button) is released automatically when the
     session ends, however it ends.
 - **Save & push** — writes `manifest.json` + `fleet.json`, commits, and pushes to `main`.

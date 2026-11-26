@@ -31,8 +31,10 @@ public enum RemoteInputKind
     Wheel,
     KeyDown,
     KeyUp,
-    End,      // the operator asked to end the session
-    Renew     // the operator asked for another grant of session time
+    End,              // the operator asked to end the session
+    Renew,            // the operator asked for another grant of session time
+    PasteText,        // the operator sent text to type into whatever has focus on the remote machine
+    ClipboardRequest  // the operator asked for the remote machine's clipboard text
 }
 
 public sealed class RemoteInputEvent
@@ -52,6 +54,11 @@ public sealed class RemoteInputEvent
 
     /// <summary>The browser's KeyboardEvent.code, e.g. "KeyA", "Enter", "ShiftLeft".</summary>
     public string Code { get; init; } = "";
+
+    /// <summary>Free-form text for <see cref="RemoteInputKind.PasteText"/> — unlike Code, this is
+    /// arbitrary pasted content, not a fixed vocabulary of key names, so it isn't character-filtered,
+    /// only length-capped.</summary>
+    public string Text { get; init; } = "";
 
     /// <summary>Parse one wire message. Returns false for anything malformed or unrecognized —
     /// callers drop it silently rather than acting on a half-understood event.</summary>
@@ -77,6 +84,8 @@ public sealed class RemoteInputEvent
                 "keyup" => RemoteInputKind.KeyUp,
                 "end" => RemoteInputKind.End,
                 "renew" => RemoteInputKind.Renew,
+                "paste" => RemoteInputKind.PasteText,
+                "clipboard-request" => RemoteInputKind.ClipboardRequest,
                 _ => RemoteInputKind.Unknown
             };
             if (kind == RemoteInputKind.Unknown) return false;
@@ -91,12 +100,14 @@ public sealed class RemoteInputEvent
                 Button = ReadButton(doc.RootElement),
                 // Bounded so one absurd message can't turn into thousands of scroll notches.
                 WheelDelta = Math.Clamp((int)ReadDouble(doc.RootElement, "dy"), -30, 30),
-                Code = ReadCode(doc.RootElement)
+                Code = ReadCode(doc.RootElement),
+                Text = ReadText(doc.RootElement)
             };
 
             // A button event without a button, or a key event without a key, is meaningless.
             if (kind is RemoteInputKind.MouseDown or RemoteInputKind.MouseUp && evt.Button.Length == 0) return false;
             if (kind is RemoteInputKind.KeyDown or RemoteInputKind.KeyUp && evt.Code.Length == 0) return false;
+            if (kind is RemoteInputKind.PasteText && evt.Text.Length == 0) return false;   // nothing to paste
             return true;
         }
         catch (JsonException)
@@ -132,5 +143,14 @@ public sealed class RemoteInputEvent
         foreach (var c in code)
             if (!char.IsAsciiLetterOrDigit(c)) return "";
         return code;
+    }
+
+    private const int MaxPasteLength = 100_000;   // generous for real pasted text, bounded against abuse
+
+    private static string ReadText(JsonElement root)
+    {
+        if (!root.TryGetProperty("text", out var p) || p.ValueKind != JsonValueKind.String) return "";
+        var text = p.GetString() ?? "";
+        return text.Length > MaxPasteLength ? text[..MaxPasteLength] : text;
     }
 }

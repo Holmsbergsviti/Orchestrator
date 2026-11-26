@@ -19,6 +19,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Orchestrator — Remote control</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <style>
     * { box-sizing: border-box; }
     /* Header and messages match the console's green-on-black terminal look; the screen
@@ -40,6 +41,15 @@
     .msg h2 { font-size: 13px; color: #00ff66; margin: 0 0 8px; font-weight: 600; }
     .msg ul { text-align: left; margin: 12px 0 0; padding-left: 20px; line-height: 1.7; }
     .msg code { background: rgba(0, 255, 102, .08); color: #00ff66; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    #clipboardPanel[hidden] { display: none; }
+    #clipboardPanel { position: fixed; top: 44px; right: 16px; z-index: 5; width: 300px;
+      background: #010a04; border: 1px solid #0f3d1f; border-radius: 6px; padding: 10px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 8px; }
+    #clipboardPanel textarea { font: inherit; background: #000; color: #b8ffcc; border: 1px solid #0f3d1f;
+      border-radius: 3px; padding: 6px; resize: vertical; }
+    #clipboardPanel .row { display: flex; gap: 6px; flex-wrap: wrap; }
+    #clipboardPanel .row button { flex: 1; }
+    #clipboardStatus { color: #4f9e66; font-size: 12px; min-height: 1.3em; }
   </style>
 </head>
 <body>
@@ -49,10 +59,19 @@
     <span class="spacer"></span>
     <span class="status" id="remaining"></span>
     <button id="renew" hidden title="Extend this session by another grant. Nothing extends on its own, and the machine's banner shows the new end time.">Renew</button>
+    <button id="clipboardBtn" title="Send text to the remote PC (pastes into whatever has focus there), or copy its clipboard back to yours">Clipboard</button>
     <button id="fullscreen" title="Full screen, and capture your keyboard so shortcuts like Ctrl+W, Ctrl+T or Alt+Tab go to the remote machine instead of this browser. Hold Esc to leave.">Full screen</button>
     <button id="inputToggle" title="When on, your mouse and keyboard drive the remote machine and normal browser shortcuts are suppressed">Input: on</button>
     <button id="end">End session</button>
   </header>
+  <div id="clipboardPanel" hidden>
+    <textarea id="clipboardTextarea" rows="4" placeholder="Type or paste text here, then &quot;Send &amp; paste&quot; to type it into whatever has focus on the remote PC."></textarea>
+    <div class="row">
+      <button id="clipboardSend">Send &amp; paste</button>
+      <button id="clipboardCopy">Copy from remote</button>
+    </div>
+    <div id="clipboardStatus"></div>
+  </div>
   <main>
     <div class="msg" id="waiting">Connecting to the relay…</div>
     <canvas id="canvas" hidden></canvas>
@@ -194,6 +213,17 @@
           // actually enforces it. What's shown here is a readout of ITS deadline, never a second
           // clock of our own that could drift out of agreement with the one doing the enforcing.
           if (msg.t === 'deadline') setDeadline(msg.untilUtc, msg.canRenew);
+
+          if (msg.t === 'clipboard') {
+            if (typeof msg.text === 'string') {
+              clipboardTextarea.value = msg.text;
+              navigator.clipboard.writeText(msg.text).then(
+                () => { clipboardStatus.textContent = 'Copied the remote PC\'s clipboard to yours.'; },
+                () => { clipboardStatus.textContent = 'Got it (shown above) — your browser would not let this page write to your clipboard automatically.'; });
+            } else {
+              clipboardStatus.textContent = 'The remote PC\'s clipboard has no text right now.';
+            }
+          }
           return;
         }
         if (!(ev.data instanceof ArrayBuffer)) return;
@@ -287,6 +317,9 @@
       // Keyboard is captured on the window, not the canvas, so it works without clicking first.
       const onKey = (ev) => {
         if (!inputEnabled) return;
+        // Typing into this page's OWN clipboard box must stay on this page, not be forwarded
+        // as remote keystrokes too.
+        if (ev.target === clipboardTextarea) return;
         // Some events carry no physical key at all (IME composition, synthetic dispatches).
         // There's nothing to press on the far end, so don't put them on the wire.
         if (!ev.code) return;
@@ -336,6 +369,34 @@
       // Deliberately NOT gated on the input toggle: renewing is a session decision, not input.
       renewBtn.onclick = () => {
         if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'renew' }));
+      };
+
+      // ---- clipboard: there is no automatic sync between your clipboard and the remote
+      // PC's (browsers don't allow that silently, for good reason), so this is explicit in
+      // both directions: type/paste here and send it to be typed into the remote PC, or ask
+      // the remote PC for its clipboard text and get it copied into yours.
+      const clipboardBtn = document.getElementById('clipboardBtn');
+      const clipboardPanel = document.getElementById('clipboardPanel');
+      const clipboardTextarea = document.getElementById('clipboardTextarea');
+      const clipboardStatus = document.getElementById('clipboardStatus');
+
+      clipboardBtn.onclick = () => {
+        clipboardPanel.hidden = !clipboardPanel.hidden;
+        if (!clipboardPanel.hidden) clipboardTextarea.focus();
+      };
+
+      document.getElementById('clipboardSend').onclick = () => {
+        if (!inputEnabled) { clipboardStatus.textContent = 'Turn Input on first.'; return; }
+        const text = clipboardTextarea.value;
+        if (!text) return;
+        send({ t: 'paste', text });
+        clipboardStatus.textContent = 'Sent — pasted into whatever has focus on the remote PC.';
+      };
+
+      document.getElementById('clipboardCopy').onclick = () => {
+        if (!inputEnabled) { clipboardStatus.textContent = 'Turn Input on first.'; return; }
+        clipboardStatus.textContent = 'Asking the remote PC for its clipboard…';
+        send({ t: 'clipboard-request' });
       };
 
       document.getElementById('end').onclick = () => {

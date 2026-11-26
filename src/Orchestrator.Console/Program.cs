@@ -41,6 +41,27 @@ if (args.Length > 0 && args[0] == "signing-key")
     return 0;
 }
 
+// "data-key": one-time setup for encrypted fleet data (heartbeats, logs, screenshots). Creates
+// the operator's decryption key on this computer (or shows the existing one) and prints what
+// goes into the code repo's AGENT_DATA_PUBLIC_KEY variable. Then exits; it doesn't start the console.
+if (args.Length > 0 && args[0] == "data-key")
+{
+    var dataKeys = new DataEncryptionKeys(args.Length > 1 ? args[1] : DataEncryptionKeys.DefaultKeyPath);
+    var (_, created) = dataKeys.LoadOrCreate();
+    System.Console.WriteLine(created ? $"Created a data-encryption key at {dataKeys.KeyPath}" : $"Using the existing data-encryption key at {dataKeys.KeyPath}");
+    System.Console.WriteLine();
+    System.Console.WriteLine("The PRIVATE key stays on this computer only — never shown, never leaves this file.");
+    System.Console.WriteLine("1. Copy the line below (just the base64, no BEGIN/END lines).");
+    System.Console.WriteLine("2. In the code repo on GitHub: Settings > Secrets and variables > Actions > Variables > New repository variable.");
+    System.Console.WriteLine("   Name: AGENT_DATA_PUBLIC_KEY   Value: paste it.");
+    System.Console.WriteLine("3. Next agent build onward, heartbeats/logs/screenshots arrive encrypted — only this console can read them.");
+    System.Console.WriteLine();
+    System.Console.WriteLine("----------------------------------------------------------------");
+    System.Console.WriteLine(dataKeys.PublicKeyBase64);
+    System.Console.WriteLine("----------------------------------------------------------------");
+    return 0;
+}
+
 // A first bare argument (not a --switch) is a convenience for the repo path. Pull it out
 // BEFORE handing args to the config system — on macOS/Linux a path starts with '/', which
 // the command-line config provider would otherwise try to parse as a switch.
@@ -63,6 +84,7 @@ builder.Services.AddSingleton(opt);
 builder.Services.AddSingleton<RelayHub>();
 builder.Services.AddSingleton<RelayKeyStore>();
 builder.Services.AddSingleton<ControlSigning>();
+builder.Services.AddSingleton<DataEncryptionKeys>();
 builder.Services.AddSingleton<ConsoleUpdater>();
 builder.Services.AddSingleton<ControlRepo>();
 builder.Services.AddHostedService<RelayHintJanitor>();

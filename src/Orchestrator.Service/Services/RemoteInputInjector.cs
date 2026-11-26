@@ -30,6 +30,16 @@ public interface IRemoteInputInjector
 
     /// <summary>Release every key and mouse button this injector is still holding down.</summary>
     void ReleaseAll();
+
+    /// <summary>Put <paramref name="text"/> on this machine's clipboard and immediately send
+    /// Ctrl+V, so it types into whatever control currently has focus — there is no automatic
+    /// clipboard sync between the operator's browser and this machine, so this is the explicit
+    /// substitute for it.</summary>
+    void SetClipboardAndPaste(string text);
+
+    /// <summary>This machine's current clipboard text, or null if there isn't any (empty,
+    /// or it holds something other than text).</summary>
+    string? GetClipboardText();
 }
 
 [SupportedOSPlatform("windows")]
@@ -110,6 +120,72 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
             if (down) _heldKeys.Add(mapped.Vk);
             else _heldKeys.Remove(mapped.Vk);
         }
+    }
+
+    public void SetClipboardAndPaste(string text)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        if (!TrySetClipboardText(text))
+        {
+            _log.LogWarning("remote input: could not set the clipboard (another app may be holding it open)");
+            return;
+        }
+        // Ctrl+V into whatever has focus. Not tracked in _heldKeys/ReleaseAll: both keys are
+        // pressed and released here, in order, so nothing is left down afterwards.
+        SendKey(VK_CONTROL, extended: false, down: true);
+        SendKey(VK_V, extended: false, down: true);
+        SendKey(VK_V, extended: false, down: false);
+        SendKey(VK_CONTROL, extended: false, down: false);
+    }
+
+    public string? GetClipboardText()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+
+        InputDesktop.Attach();
+        if (!OpenClipboard(IntPtr.Zero))
+        {
+            _log.LogDebug("remote input: could not open the clipboard to read it");
+            return null;
+        }
+        try
+        {
+            if (!IsClipboardFormatAvailable(CF_UNICODETEXT)) return null;
+            var handle = GetClipboardData(CF_UNICODETEXT);
+            if (handle == IntPtr.Zero) return null;
+            var ptr = GlobalLock(handle);
+            if (ptr == IntPtr.Zero) return null;
+            try
+            {
+                var text = Marshal.PtrToStringUni(ptr);
+                return string.IsNullOrEmpty(text) ? null : text;
+            }
+            finally { GlobalUnlock(handle); }
+        }
+        finally { CloseClipboard(); }
+    }
+
+    private bool TrySetClipboardText(string text)
+    {
+        InputDesktop.Attach();
+        if (!OpenClipboard(IntPtr.Zero)) return false;
+        try
+        {
+            EmptyClipboard();
+            // +1 for the UTF-16 null terminator Windows expects inside the global block.
+            var bytes = (text.Length + 1) * 2;
+            var hGlobal = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)bytes);
+            if (hGlobal == IntPtr.Zero) return false;
+            var ptr = GlobalLock(hGlobal);
+            if (ptr == IntPtr.Zero) { GlobalFree(hGlobal); return false; }
+            try { Marshal.Copy((text + '\0').ToCharArray(), 0, ptr, text.Length + 1); }
+            finally { GlobalUnlock(hGlobal); }
+            // The clipboard owns hGlobal from here once SetClipboardData succeeds — freeing it
+            // ourselves afterwards would free memory Windows still thinks it has.
+            if (SetClipboardData(CF_UNICODETEXT, hGlobal) == IntPtr.Zero) { GlobalFree(hGlobal); return false; }
+            return true;
+        }
+        finally { CloseClipboard(); }
     }
 
     public void ReleaseAll()
@@ -311,6 +387,44 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
 
     private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_V = (ushort)'V';
+
+    // ---- clipboard (SetClipboardAndPaste / GetClipboardText) ------------------------------
+
+    private const uint CF_UNICODETEXT = 13;
+    private const uint GMEM_MOVEABLE = 0x0002;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EmptyClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetClipboardData(uint uFormat);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsClipboardFormatAvailable(uint format);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalLock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GlobalUnlock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalFree(IntPtr hMem);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MOUSEINPUT

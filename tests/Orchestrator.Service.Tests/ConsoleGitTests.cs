@@ -91,6 +91,7 @@ exit 0
         new RelayHub(NullLogger<RelayHub>.Instance),
         new RelayKeyStore(Path.Combine(_root, "pins.json"), NullLogger<RelayKeyStore>.Instance),
         new ControlSigning(Path.Combine(_root, "no-key.pem")),
+        new DataEncryptionKeys(Path.Combine(_root, "no-data-key.pem")),
         NullLogger<ControlRepo>.Instance);
 
     private string OnGitHub(string file) { Git(_root, "--git-dir=" + Remote, "rev-parse", "main"); return Git(_root, "--git-dir=" + Remote, "show", "main:" + file); }

@@ -135,6 +135,16 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   desktop, never pixels — the capture is downscaled and may span monitors. Parsing is
   deliberately strict (it becomes real keystrokes), and every held key/button is released when
   a session ends, or it stays stuck down on that desktop.
+- **No automatic clipboard sync between operator and remote machine** — Ctrl+C/Ctrl+V on the
+  canvas are just forwarded keystrokes, so they only ever act on whichever clipboard the remote
+  machine's own OS is holding. The viewer's **Clipboard** panel is the explicit substitute: `paste`
+  (carries free-form `text`, length-capped not character-filtered, unlike `code`) sets the remote
+  clipboard (`RemoteInputInjector.SetClipboardAndPaste`, Win32 `OpenClipboard`/`SetClipboardData`)
+  and immediately sends Ctrl+V; `clipboard-request` reads the remote clipboard
+  (`GetClipboardText`) and the reply crosses back to the viewer as a `{"t":"clipboard","text":...}`
+  JSON message. That reply can only go out through the frame loop (the single socket writer), so
+  the receive loop hands it over the same flag-plus-field pattern as the deadline broadcast
+  (`_clipboardResponsePending`/`_clipboardResponseText`) rather than writing to the socket itself.
 - Sessions run in renewable **grants** (`RemoteSessionMaxMinutes`, ceiling `MaxSessionGrants`).
   The agent owns the deadline and broadcasts it; the viewer only displays it. Only the frame
   loop writes to the agent's socket — the receive loop mutates state and flags it, because a
@@ -175,6 +185,21 @@ that matter:
   change, since saving signs the whole file. Keep the three copies of the signed format in step.
 - Heartbeats carry `agentSha256` (the running exe's hash) and the console compares it to
   `agent.json`, so "which machines are on the current build" is answerable.
+- **Encrypted fleet data.** Signing stops a stolen token from *commanding* the fleet; it does
+  nothing about *reading* it. Separately, heartbeats (`state/<id>.json`), uploaded log tails
+  (`logs/<id>.txt`) and screenshots (`screenshots/<id>/*.jpg`) are sealed to the operator's
+  **data** key before an agent ever writes them to GitHub (`FleetDataCipher`: a per-message
+  ephemeral-EC-Diffie-Hellman + HKDF + AES-256-GCM scheme, same shape as `RelayCipher` but with
+  one standing keypair instead of a per-session one). `DataEncryptionKeys` on the console holds
+  the private half (made with the `data-key` verb, stored like the signing key but in a
+  separate file — one key, one job, so neither use can weaken the other); `FleetDataEncryption`
+  in the agent holds only the baked-in public half (`-p:OrchestratorDataPublicKey=<SPKI
+  base64>`, from the `AGENT_DATA_PUBLIC_KEY` repo **variable** — it's public, so unlike
+  `AGENT_SIGNING_KEY` it isn't a secret). A build without the key sends plain data, same as
+  before; the console's `DecryptIfNeeded` recognizes which is which by a magic prefix, so old
+  and new agents coexist on one fleet with no flag day. Losing the data key only means old
+  uploads made to it are unrecoverable — nothing else in the fleet depends on it, unlike losing
+  the signing key.
 
 **The exe is `WinExe`, not `Exe`.** Four of its five modes run with no user watching, and a
 console subsystem gave the screenshot/remote-session verbs a visible terminal window in the

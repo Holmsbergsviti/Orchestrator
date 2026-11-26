@@ -56,6 +56,7 @@ public sealed class FleetReporter : IFleetReporter
     private readonly IManifestService _manifests;
     private readonly IConfigService _configService;
     private readonly IRelayIdentity _relayIdentity;   // supplies the public key the console pins
+    private readonly IFleetDataEncryption _dataEncryption;   // seals heartbeats/logs for the console only
     private readonly ILogger<FleetReporter> _log;
     private readonly OrchestratorConfig _config;
 
@@ -64,9 +65,11 @@ public sealed class FleetReporter : IFleetReporter
         IManifestService manifests,
         IConfigService configService,
         IRelayIdentity relayIdentity,
+        IFleetDataEncryption dataEncryption,
         ILogger<FleetReporter> log)
     {
         _relayIdentity = relayIdentity;
+        _dataEncryption = dataEncryption;
         _github = github;
         _manifests = manifests;
         _configService = configService;
@@ -121,7 +124,7 @@ public sealed class FleetReporter : IFleetReporter
             }
 
             var path = $"state/{machine.MachineId}.json";
-            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(current, JsonOpts));
+            var bytes = _dataEncryption.EncryptIfEnabled(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(current, JsonOpts)));
             var sha = await _github.GetFileShaAsync(path, branch, ct);   // null on first push -> create; otherwise update
             var message = $"heartbeat: {machine.Hostname} ({machine.MachineId}) {current.LastSeenUtc}";
 
@@ -164,7 +167,7 @@ public sealed class FleetReporter : IFleetReporter
             if (text is null) return;   // no log file yet
             var path = $"logs/{machine.MachineId}.txt";
             var sha = await _github.GetFileShaAsync(path, branch, ct);
-            await _github.PutFileAsync(path, Encoding.UTF8.GetBytes(text), branch,
+            await _github.PutFileAsync(path, _dataEncryption.EncryptIfEnabled(Encoding.UTF8.GetBytes(text)), branch,
                 $"log: {machine.Hostname} ({machine.MachineId}) {DateTimeOffset.UtcNow:O}", sha, ct);
             _lastLogUpload = DateTimeOffset.UtcNow;
             _log.LogDebug("Uploaded log tail to {Branch}:{Path}", branch, path);
