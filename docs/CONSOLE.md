@@ -64,6 +64,9 @@ It prints the local URL (default `http://localhost:5080`) and opens your browser
 | `Urls` | Address the UI listens on | `http://localhost:5080` |
 
 ## Using it
+
+The page has four tabs under the header: **Machines**, **Activity**, **Targeting** and **Add program**.
+The tab you were on is remembered across reloads, and a link such as `http://localhost:5080/#activity` opens it directly.
 - **Machines** — every machine that has reported, with an online/offline dot, OS, agent
   version, last-seen, how many programs it's running, and last sync status. Type a **label**
   to give a machine a friendly name (stored in `fleet.json`).

@@ -91,6 +91,13 @@
     .flags label { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 12px; }
     .addgrid .full { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
     .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    /* Page tabs: one section at a time instead of one long scroll. */
+    .tabs { display: flex; gap: 0; margin-bottom: 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    .tabs button { border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; background: transparent;
+                   padding: 8px 18px; margin-bottom: -1px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .tabs button:hover { box-shadow: none; color: var(--accent); }
+    .tabs button.active { background: var(--card); border-color: var(--line); color: var(--accent); text-shadow: var(--glow); font-weight: 700; }
+    [data-tab][hidden] { display: none; }
     .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
     .seg button { border: none; border-radius: 0; padding: 6px 13px; background: rgba(0, 0, 0, .55); }
     .seg button:hover { box-shadow: none; }
@@ -232,7 +239,14 @@
   <main>
     <div id="warnings"></div>
 
-    <div class="card">
+    <nav class="tabs" id="tabs" role="tablist">
+      <button type="button" role="tab" data-go="machines">Machines</button>
+      <button type="button" role="tab" data-go="activity">Activity</button>
+      <button type="button" role="tab" data-go="targeting">Targeting</button>
+      <button type="button" role="tab" data-go="add">Add program</button>
+    </nav>
+
+    <div class="card" data-tab="machines">
       <h2>Machines <button type="button" id="wakeAll" style="margin-left:10px; font-size:12px; padding:4px 10px">Wake all</button></h2>
       <div class="scroll">
         <table id="machines">
@@ -248,7 +262,7 @@
       <div class="empty" id="noMachines" hidden>No machines have reported yet.</div>
     </div>
 
-    <div class="card" id="activityCard">
+    <div class="card" id="activityCard" data-tab="activity">
       <h2>Activity
         <select id="actFilter" title="Show one machine only" style="margin-left:10px; font-size:12px; padding:3px 6px"></select>
         <button type="button" id="actReload" style="margin-left:6px; font-size:12px; padding:4px 10px">Refresh</button>
@@ -264,7 +278,7 @@
       <div style="margin-top:8px"><button type="button" id="actMore" hidden style="font-size:12px; padding:4px 10px">Show more</button></div>
     </div>
 
-    <div class="card">
+    <div class="card" data-tab="targeting">
       <h2>Targeting</h2>
       <div class="toolbar">
         <div class="seg" id="viewSeg">
@@ -277,8 +291,8 @@
       <div id="tview"></div>
     </div>
 
-    <div class="card">
-      <details class="add">
+    <div class="card" data-tab="add">
+      <details class="add" open>
         <summary>Add a program</summary>
         <div class="addgrid">
           <label for="a-name">Name *</label>
@@ -1065,6 +1079,23 @@
     $('#upgradeSkip').onclick = () => { updateSkipped = true; renderUpdate(); };
     checkUpdate();
     setInterval(checkUpdate, 5 * 60 * 1000);   // a long-open tab still finds out
+
+    // Tabs: show one section at a time. The choice is remembered (and can be linked as #activity etc.).
+    const TABS = ['machines', 'activity', 'targeting', 'add'];
+    function showTab(name) {
+      if (!TABS.includes(name)) name = 'machines';
+      document.querySelectorAll('[data-tab]').forEach(el => { el.hidden = el.dataset.tab !== name; });
+      document.querySelectorAll('#tabs [data-go]').forEach(b => {
+        const on = b.dataset.go === name;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      try { localStorage.setItem('orch.tab', name); } catch { /* storage may be blocked */ }
+      if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
+    }
+    document.querySelectorAll('#tabs [data-go]').forEach(b => { b.onclick = () => showTab(b.dataset.go); });
+    addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+    showTab(location.hash.slice(1) || (() => { try { return localStorage.getItem('orch.tab'); } catch { return null; } })() || 'machines');
 
     $('#reload').onclick = () => {
       if (dirty && !confirm('Discard unsaved changes and reload?')) return;
