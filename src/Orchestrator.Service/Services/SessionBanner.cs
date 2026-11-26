@@ -145,6 +145,10 @@ internal sealed class SessionBanner : IDisposable
             case WM_PAINT:
                 Paint(hWnd);
                 return IntPtr.Zero;
+            case WM_LBUTTONUP when RemoteInputInjector.IsInjected(GetMessageExtraInfo().ToInt64()):
+                // The operator's own click landed on the banner (it is invisible to them, in the corner where
+                // a window's close button is). Only a person at this PC may end the session this way.
+                return IntPtr.Zero;
             case WM_LBUTTONUP:
             case WM_CLOSE:
             case WM_APP_END:
@@ -254,6 +258,7 @@ internal sealed class SessionBanner : IDisposable
     [DllImport("user32.dll")] private static extern bool GetMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG lpMsg);
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessageW(ref MSG lpMsg);
+    [DllImport("user32.dll")] private static extern IntPtr GetMessageExtraInfo();
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
     [DllImport("user32.dll")] private static extern IntPtr BeginPaint(IntPtr hWnd, out PAINTSTRUCT lpPaint);
     [DllImport("user32.dll")] private static extern bool EndPaint(IntPtr hWnd, ref PAINTSTRUCT lpPaint);
