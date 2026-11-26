@@ -51,6 +51,7 @@ public sealed class OrchestratorConfig
     /// <summary>Whether this machine reports a heartbeat back to GitHub. Needs a token with write access.</summary>
     public bool ReportState { get; set; } = true;               // true = commit state/<machineId>.json each time it changes
     public bool UploadLogs { get; set; } = true;                // true = also commit the newest part of this agent's log (logs/<machineId>.txt) with each heartbeat, so the console can show it
+    public bool LaunchSessionsAsSystem { get; set; } = true;    // true = start screenshots/remote sessions from the service on the user's desktop (works for any account); false = the old scheduled task run as the user
     public int LogUploadMinutes { get; set; } = 2;              // how often the log tail is committed while UploadLogs is on (at most once per sync cycle)
 
     /// <summary>Branch the heartbeat files are committed to (kept off the main branch).</summary>

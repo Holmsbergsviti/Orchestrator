@@ -93,6 +93,11 @@ target machine also shows a banner with the reason, and logs it to `logs\log-*.t
 - It only starts on that machine's **next sync**. Wait one `SyncIntervalMinutes`.
 - Nobody signed in on that machine? Then it can't run: the capture needs a desktop session,
   and the log says `no interactive user is logged on`.
+- The log says `task state after start: ... Last Result: -2147024891` (0x80070005, access denied)?
+  That is the old route, where the signed-in user was not allowed to run the agent from its locked
+  folder. Current builds start the helper from the service (`started on <user>'s desktop`) and only
+  fall back to that route when it fails (look for `could not start it on the user's desktop`).
+  `LaunchSessionsAsSystem: false` in `appsettings.json` forces the old route.
 
 **Agent log says `remote-session '...' request expired before this sync; skipping`** — the
 request sat unclaimed for more than 10 minutes, so the agent discarded it rather than starting
