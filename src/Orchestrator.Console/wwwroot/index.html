@@ -556,6 +556,10 @@
             textContent: 'View', title: 'Latest screenshot, captured ' + relTime(m.lastScreenshotUtc)
           }));
         }
+        grid.append(el('a', {
+          href: '/api/log/' + encodeURIComponent(m.machineId), target: '_blank', rel: 'noopener',
+          textContent: 'Log', title: "The end of this machine's agent log, sent with its heartbeat (about every 30 min)"
+        }));
         grid.append(el('button', { type: 'button', textContent: 'Remove…', className: 'danger wide',
           title: 'Remove this machine from the list, and optionally uninstall the agent from it', onclick: () => openRemove(m) }));
         power.append(grid);

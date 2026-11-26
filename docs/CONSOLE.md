@@ -149,6 +149,14 @@ Targets are written as **hostnames**, so `manifest.json` stays human-readable
 manifest stores the machine's real hostname. (Note: if two machines share a hostname, a
 hostname target hits both — rename one to disambiguate.)
 
+## Machine log
+
+Each row has a **Log** link. It opens the end of that PC's agent log (the last 400 lines of the newest file in
+`logs\`), which the agent uploads to the `fleet-state` branch (`logs/<machineId>.txt`) together with each heartbeat,
+so about every 30 minutes. It includes the lines written by screenshot and remote-session runs, which is the first
+place to look when a request seems ignored. Turn it off per machine with `UploadLogs: false` in `appsettings.json`.
+The log can contain host names and file paths, so keep the control repo private.
+
 ## Activity log
 
 The **Activity** card under *Machines* lists what you have done from the console, newest first: shut down,

@@ -698,7 +698,7 @@ public sealed class ControlRepo
             try
             {
                 removed = await _git.RemovePathsOnRemoteBranchAsync(_opt.Remote, _opt.FleetStateBranch,
-                    new[] { $"{StateDir}/{machineId}.json", $"screenshots/{machineId}" },
+                    new[] { $"{StateDir}/{machineId}.json", $"screenshots/{machineId}", $"logs/{machineId}.txt" },
                     $"console: removed machine {host ?? machineId} ({machineId})", ct);
             }
             catch (GitException ex) { return Fail($"Couldn't remove it from GitHub: {ex.Message}"); }
@@ -812,6 +812,15 @@ public sealed class ControlRepo
         var meta = ReadLatestScreenshotMeta(machineId);
         if (meta is null || string.IsNullOrWhiteSpace(meta.Path)) return null;
         return _git.ReadFileBytesFromRef(FleetRef, meta.Path);
+    }
+
+    /// <summary>Fetch, then return the log tail a machine last uploaded with its heartbeat, or null if none.
+    /// The id is checked first: it ends up in a git path.</summary>
+    public async Task<string?> GetMachineLogAsync(string machineId, CancellationToken ct)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(machineId ?? "", "^[A-Za-z0-9-]{1,64}$")) return null;
+        await _git.FetchAsync(_opt.Remote, ct);
+        return _git.ReadFileFromRef(FleetRef, $"logs/{machineId}.txt");
     }
 
     /// <summary>Queue a live remote-control session on a machine via commands.json, then push,
