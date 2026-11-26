@@ -146,6 +146,15 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
 
     // ---- the actual SendInput calls -------------------------------------------------------
 
+    /// <summary>Stamped on every injected event ("ORCH"), so the banner can tell the operator's clicks
+    /// from the person at the PC. The banner sits in the top-right corner, where a window's close button
+    /// is, and the operator can't see it (it is left out of the capture): without this, an operator click
+    /// there ended the session. Windows hands this value back to a window as GetMessageExtraInfo().</summary>
+    public const long InjectedMarker = 0x4F524348;
+
+    /// <summary>True when a message's extra info says it came from this injector. Pure, so it is unit-tested.</summary>
+    public static bool IsInjected(long extraInfo) => extraInfo == InjectedMarker;
+
     private void SendMouse(uint flags, double normalizedX, double normalizedY, int mouseData)
     {
         var input = new INPUT
@@ -160,7 +169,8 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
                     dx = (int)Math.Round(normalizedX * 65535d),
                     dy = (int)Math.Round(normalizedY * 65535d),
                     mouseData = unchecked((uint)mouseData),
-                    dwFlags = flags
+                    dwFlags = flags,
+                    dwExtraInfo = (IntPtr)InjectedMarker
                 }
             }
         };
@@ -176,7 +186,7 @@ public sealed class RemoteInputInjector : IRemoteInputInjector
         Send(new INPUT
         {
             type = INPUT_KEYBOARD,
-            U = new InputUnion { ki = new KEYBDINPUT { wVk = vk, dwFlags = flags } }
+            U = new InputUnion { ki = new KEYBDINPUT { wVk = vk, dwFlags = flags, dwExtraInfo = (IntPtr)InjectedMarker } }
         });
     }
 
