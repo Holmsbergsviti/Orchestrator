@@ -46,8 +46,17 @@ public sealed class Worker : BackgroundService   // BackgroundService = a long-r
 
         var interval = TimeSpan.FromMinutes(Math.Max(1, _config.SyncIntervalMinutes));  // wait time between syncs (at least 1 minute)
 
+        var lastLogCleanup = DateTime.MinValue;                // when old log files were last trimmed
+
         while (!stoppingToken.IsCancellationRequested)  // keep looping until the service is asked to stop
         {
+            // Trim this PC's own old logs at startup and then about every 6 hours (cheap: one directory listing).
+            if (DateTime.UtcNow - lastLogCleanup >= TimeSpan.FromHours(6))
+            {
+                lastLogCleanup = DateTime.UtcNow;
+                LogRetention.Prune(_config.LogsPath, _config.LogRetentionDays, _config.LogMaxTotalMegabytes * 1024L * 1024L, DateTime.UtcNow, _log);
+            }
+
             try
             {
                 await _sync.RunSyncAsync(stoppingToken);  // run one full sync cycle

@@ -77,6 +77,13 @@ program never runs at boot, and it launches in the interactive user session.
 
 **Session matters.** The service runs in Windows **session 0** (no interactive desktop/audio):
 - `runOnceInstalled` runs there (fine for silent tasks, invisible for UI/audio).
+- **Screenshots and live remote sessions are started by the service itself** (`UserSessionLauncher`): it copies its
+  SYSTEM token, moves it to the signed-in user's session (`TokenSessionId`) and `CreateProcessAsUser`s the helper on
+  `winsta0\default`, with SYSTEM's own environment (never the user's: the self-extracting exe would unpack into a
+  user-writable temp folder). Reason: the install folder is locked to SYSTEM+Administrators (it holds the token), so
+  the old scheduled task "run as the user" failed with 0x80070005 for any account that isn't allowed to run the
+  agent. `LaunchSessionsAsSystem` (default true) switches it off; if the launch fails the old task route is the
+  fallback (its outcome is logged ~40 s later by `LogTaskOutcomeLater`). Not covered: a UAC/secure-desktop prompt.
 - `runRequest` ("Run now") and startup runs use a **one-time interactive scheduled task**
   (`ScheduledTaskService.RunInteractiveOnce`, InteractiveToken) so they run in the logged-in user's
   session — that's the only way GUI/audio programs are visible.
@@ -197,6 +204,10 @@ user's session that closing would kill. Verbs a human runs (`run`, `install`) ca
 - **Agent log upload.** Every `LogUploadMinutes` (default 2, checked once per sync, independent of the heartbeat's 30-minute cap) `FleetReporter` commits the tail of the
   newest `logs\log-*.txt` to `logs/<machineId>.txt` on `fleet-state` (`UploadLogs`, default on); the console serves it at
   `GET /api/log/{machineId}` (the "Log" link). Forget removes it too.
+  **On-PC log retention (`LogRetention`).** The agent's own `logs\log-*.txt` are trimmed at startup and every ~6 h by age
+  (`LogRetentionDays`, default 14) then by total size (`LogMaxTotalMegabytes`, default 200), oldest first; the newest file
+  and the json files are never touched. Serilog's `retainedFileCountLimit` follows the same days. `System.Net.Http.HttpClient`
+  is raised to Warning because its 4 lines per request were most of the volume.
 
 - **Removing a machine.** "Forget" (`ControlRepo.ForgetMachineAsync`) deletes `state/<id>.json` and
   `screenshots/<id>` from the `fleet-state` branch via a scratch clone (`GitRepo.RemovePathsOnRemoteBranchAsync`;

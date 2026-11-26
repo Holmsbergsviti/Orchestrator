@@ -133,6 +133,19 @@ public sealed class ScheduledTaskService : IScheduledTaskService
 
     public void RunInteractiveScreenshotOnce(string requestId)
     {
+        var exe = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
+
+        // First choice: start it from this service, on the user's desktop. Works for every kind of account.
+        if (TryStartFromService(exe, $"capture-screenshot {requestId}", TimeSpan.FromMinutes(5), $"screenshot '{requestId}'", out var nobody))
+            return;
+        if (nobody)
+        {
+            _log.LogWarning("screenshot '{Id}': no interactive user is logged on — cannot capture; skipping", requestId);
+            return;
+        }
+
+        // Fallback: the old scheduled task run as the logged-in user (only works if that user may run the agent).
         var user = GetInteractiveUser();
         if (string.IsNullOrWhiteSpace(user))
         {
@@ -140,8 +153,6 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             return;   // nothing to attach an interactive process to
         }
 
-        var exe = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
         var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
         var taskName = _config.RegistryEntryPrefix + "screenshot_" + requestId;
         var xml = BuildInteractiveCaptureXml(exe, $"capture-screenshot {requestId}", user, start);
@@ -163,16 +174,8 @@ public sealed class ScheduledTaskService : IScheduledTaskService
 
     public void RunInteractiveRemoteSessionOnce(string sessionId, string? proof, TimeSpan maxDuration, string? relayUrl = null, string? relayThumbprint = null, string? relayKey = null)
     {
-        var user = GetInteractiveUser();
-        if (string.IsNullOrWhiteSpace(user))
-        {
-            _log.LogWarning("remote-session '{Id}': no interactive user is logged on — cannot start; skipping", sessionId);
-            return;   // nothing to attach an interactive process to
-        }
-
         var exe = Environment.ProcessPath
             ?? throw new InvalidOperationException("Cannot determine the orchestrator exe path for the scheduled task.");
-        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
         var taskName = _config.RegistryEntryPrefix + "session_" + sessionId;
         // The proof (hex) is passed straight through to the session process, which presents
         // it to the relay. It's bound to this machine and this session, so it's no use to
@@ -192,6 +195,25 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             // Like the proof it is only meaningful for this one session.
             if (!string.IsNullOrEmpty(relayKey)) args += $" {relayKey}";
         }
+
+        // First choice: start it from this service, on the user's desktop. Works for every kind of account.
+        // (The arguments are never logged: they carry the proof and, for tunnel sessions, the encryption key.)
+        if (TryStartFromService(exe, args, maxDuration + TimeSpan.FromMinutes(15), $"remote-session '{sessionId}'", out var nobody))
+            return;
+        if (nobody)
+        {
+            _log.LogWarning("remote-session '{Id}': no interactive user is logged on — cannot start; skipping", sessionId);
+            return;
+        }
+
+        // Fallback: the old scheduled task run as the logged-in user (only works if that user may run the agent).
+        var user = GetInteractiveUser();
+        if (string.IsNullOrWhiteSpace(user))
+        {
+            _log.LogWarning("remote-session '{Id}': no interactive user is logged on — cannot start; skipping", sessionId);
+            return;   // nothing to attach an interactive process to
+        }
+        var start = DateTime.Now.AddSeconds(15);                // fire shortly from now
         var xml = BuildInteractiveSessionXml(exe, args, user, start, maxDuration);
 
         var tmp = Path.Combine(Path.GetTempPath(), $"orch-session-{Guid.NewGuid():N}.xml");
@@ -209,6 +231,18 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         {
             try { File.Delete(tmp); } catch { /* best effort */ }
         }
+    }
+
+    /// <summary>Try the service-launched route (see <see cref="UserSessionLauncher"/>). True when the helper is
+    /// running. <paramref name="nobodyLoggedOn"/> is true when there is nobody to show it to, so no fallback can work.
+    /// Off when <c>LaunchSessionsAsSystem</c> is false.</summary>
+    private bool TryStartFromService(string exe, string arguments, TimeSpan killAfter, string label, out bool nobodyLoggedOn)
+    {
+        nobodyLoggedOn = false;
+        if (!_config.LaunchSessionsAsSystem) return false;
+        var result = UserSessionLauncher.TryLaunch(exe, arguments, killAfter, label, _log);
+        nobodyLoggedOn = result.NobodyLoggedOn;
+        return result.Started;
     }
 
     /// <summary>The session starts in the user's desktop, where its own log lines may never reach us, so a
