@@ -49,6 +49,7 @@
     <span class="spacer"></span>
     <span class="status" id="remaining"></span>
     <button id="renew" hidden title="Extend this session by another grant. Nothing extends on its own, and the machine's banner shows the new end time.">Renew</button>
+    <button id="fullscreen" title="Full screen, and capture your keyboard so shortcuts like Ctrl+W, Ctrl+T or Alt+Tab go to the remote machine instead of this browser. Hold Esc to leave.">Full screen</button>
     <button id="inputToggle" title="When on, your mouse and keyboard drive the remote machine and normal browser shortcuts are suppressed">Input: on</button>
     <button id="end">End session</button>
   </header>
@@ -304,6 +305,33 @@
         canvas.style.cursor = inputEnabled ? 'crosshair' : 'default';
       };
       canvas.style.cursor = 'crosshair';
+
+      // ---- full screen + keyboard capture ------------------------------------------------
+      // preventDefault() above stops most shortcuts, but the browser keeps a few for itself
+      // (Ctrl+W, Ctrl+T, Ctrl+N, Alt+Tab, the Esc key...). Chrome and Edge can hand ALL keys to a
+      // page, but only while it is full screen (the Keyboard Lock API). Holding Esc still leaves
+      // full screen, so you are never trapped. Browsers without the API still get full screen.
+      const fsBtn = document.getElementById('fullscreen');
+      const keyboardLockSupported = !!(navigator.keyboard && navigator.keyboard.lock);
+      const unlockKeys = () => { try { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); } catch { /* nothing to undo */ } };
+
+      fsBtn.onclick = async () => {
+        try {
+          if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+          await document.documentElement.requestFullscreen();
+          if (keyboardLockSupported) await navigator.keyboard.lock();   // all keys, not just a list
+        } catch (e) {
+          statusEl.textContent = 'Full screen failed: ' + (e && e.message ? e.message : e);
+        }
+      };
+
+      document.addEventListener('fullscreenchange', () => {
+        const full = !!document.fullscreenElement;
+        fsBtn.textContent = full ? 'Exit full screen' : 'Full screen';
+        if (!full) unlockKeys();   // leaving full screen (also by holding Esc) gives the keyboard back
+        else if (!keyboardLockSupported)
+          statusEl.textContent = 'Full screen (this browser cannot capture all shortcuts; Chrome or Edge can)';
+      });
 
       // Deliberately NOT gated on the input toggle: renewing is a session decision, not input.
       renewBtn.onclick = () => {
