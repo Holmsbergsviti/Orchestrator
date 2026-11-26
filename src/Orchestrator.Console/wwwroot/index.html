@@ -98,7 +98,6 @@
     .tabs button:hover { box-shadow: none; color: var(--accent); }
     .tabs button.active { background: var(--card); border-color: var(--line); color: var(--accent); text-shadow: var(--glow); font-weight: 700; }
     [data-tab][hidden] { display: none; }
-    .avwarn { color: var(--warn); }
     .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 3px; overflow: hidden; }
     .seg button { border: none; border-radius: 0; padding: 6px 13px; background: rgba(0, 0, 0, .55); }
     .seg button:hover { box-shadow: none; }
@@ -161,6 +160,16 @@
     #removeDlg .choice { display: grid; gap: 4px; margin: 14px 0; }
     #removeDlg .choice small { color: var(--muted); }
     #removeDlg .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    /* Antivirus dialog: same box look, calmer border since it's informational, not a danger action. */
+    #avDlg { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+             padding: 20px; background: rgba(0, 0, 0, .85); }
+    #avDlg[hidden] { display: none; }
+    #avDlg .box { max-width: 480px; width: 100%; max-height: 90vh; overflow: auto; padding: 24px 28px;
+                  background: #050a06; border: 2px solid var(--accent); box-shadow: var(--glow); }
+    #avDlg h2 { margin: 0 0 8px; color: var(--accent); font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
+    #avDlg ul { margin: 14px 0; padding-left: 20px; }
+    #avDlg li.other { color: var(--warn); }
+    #avDlg .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
     /* "New version" flag: a loud bar across the top whenever GitHub has newer console code, and a
        full-screen overlay (until updated) that stops the page being used on an old version. */
     #upgradeBar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px;
@@ -211,6 +220,18 @@
       <div class="actions"><button id="removeCancel">Cancel</button></div>
     </div>
   </div>
+  <div id="avDlg" hidden role="dialog" aria-modal="true" aria-labelledby="avTitle">
+    <div class="box">
+      <h2 id="avTitle">Antivirus</h2>
+      <p id="avWho"></p>
+      <ul id="avList"></ul>
+      <p class="muted" id="avEmpty" hidden>Windows Security Center reports none on this machine.</p>
+      <small class="muted">Read-only, reported by Windows Security Center. Anything other than Windows' own
+        Defender is highlighted — often a previous owner's leftover on a second-hand PC.</small>
+      <div class="actions"><button id="avClose">Close</button></div>
+    </div>
+  </div>
+
   <div id="upgradeBar" hidden role="alert">
     <span class="grow" id="upgradeBarText"></span>
     <button id="upgradeBarBtn" class="primary">Update now</button>
@@ -528,15 +549,22 @@
       renderTargeting();
     }
 
-    // Which antivirus the PC reports (Windows Security Center). Anything other than Windows' own is
-    // flagged: on second-hand PCs it is usually the previous owner's leftover.
-    function antivirusLine(m) {
+    // Antivirus dialog: full list for one machine, opened from its "AV (N)" button.
+    function openAv(m) {
+      $('#avWho').textContent = `${m.label || m.hostname} (${m.hostname})`;
+      const list = $('#avList'); list.innerHTML = '';
       const av = m.antivirus || [];
-      if (av.length === 0) return '';
-      const other = av.filter(n => !/defender|windows security/i.test(n));
-      return el('div', { className: other.length ? 'avwarn' : '', title: 'Antivirus reported by Windows Security Center',
-                         textContent: 'AV: ' + av.join(', ') });
+      for (const name of av) {
+        const other = !/defender|windows security/i.test(name);
+        list.append(el('li', { className: other ? 'other' : '', textContent: name + (other ? ' (not Windows Defender)' : '') }));
+      }
+      $('#avEmpty').hidden = av.length > 0;
+      $('#avDlg').hidden = false;
     }
+    function closeAv() { $('#avDlg').hidden = true; }
+    $('#avClose').onclick = closeAv;
+    $('#avDlg').addEventListener('click', e => { if (e.target.id === 'avDlg') closeAv(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#avDlg').hidden) closeAv(); });
 
     function renderMachines() {
       const tb = $('#machines tbody'); tb.innerHTML = '';
@@ -554,7 +582,10 @@
           ? el('span', { className: 'pill ok', textContent: 'ok' })
           : el('span', { className: 'pill bad', title: m.lastError || '', textContent: 'error' });
         const power = el('td', {}, []);
+        const avCount = (m.antivirus || []).length;
         const grid = el('div', { className: 'power' }, [
+          ...(avCount > 0 ? [el('button', { type: 'button', textContent: `AV (${avCount})`,
+            title: 'Antivirus Windows Security Center reports on this PC (read-only)', onclick: () => openAv(m) })] : []),
           el('button', { type: 'button', textContent: 'Shut down', title: 'Power off this machine on its next sync',
             onclick: () => sendCommand(m, 'shutdown') }),
           el('button', { type: 'button', textContent: 'Restart', title: 'Reboot this machine on its next sync',
@@ -592,7 +623,7 @@
           status,
           el('td', {}, labelInput),
           el('td', {}, el('code', { textContent: m.hostname })),
-          el('td', { className: 'muted' }, [m.os || '—', antivirusLine(m)]),
+          el('td', { className: 'muted', textContent: m.os || '—' }),
           el('td', { className: 'muted' }, [agentBuildCell(m)]),
           el('td', { title: m.lastSeenUtc || '', textContent: relTime(m.lastSeenUtc) }),
           el('td', { textContent: (m.appliedProgramIds || []).length + ' program(s)' }),
