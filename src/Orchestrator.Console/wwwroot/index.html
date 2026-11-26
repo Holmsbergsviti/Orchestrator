@@ -170,6 +170,20 @@
     #avDlg ul { margin: 14px 0; padding-left: 20px; }
     #avDlg li.other { color: var(--warn); }
     #avDlg .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    /* Generic confirm pop-up: replaces the browser's own confirm(), themed to match. */
+    #confirmDlg { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+                  padding: 20px; background: rgba(0, 0, 0, .85); }
+    #confirmDlg[hidden] { display: none; }
+    #confirmDlg .box { max-width: 460px; width: 100%; max-height: 90vh; overflow: auto; padding: 24px 28px;
+                       background: #050a06; border: 2px solid var(--accent); box-shadow: var(--glow);
+                       animation: confirmIn .12s ease-out; }
+    @keyframes confirmIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+    #confirmDlg.danger .box { border-color: var(--err); box-shadow: 0 0 22px rgba(255, 59, 92, .45); }
+    #confirmQuestion { margin: 0 0 10px; font-size: 16px; color: var(--accent); text-shadow: var(--glow); }
+    #confirmDlg.danger #confirmQuestion { color: var(--err); text-shadow: none; }
+    #confirmDetail { margin: 0 0 18px; color: var(--muted); white-space: pre-line; }
+    #confirmDlg .actions { display: flex; gap: 10px; justify-content: flex-end; }
+    @media (prefers-reduced-motion: reduce) { #confirmDlg .box { animation: none; } }
     /* "New version" flag: a loud bar across the top whenever GitHub has newer console code, and a
        full-screen overlay (until updated) that stops the page being used on an old version. */
     #upgradeBar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px;
@@ -220,6 +234,17 @@
       <div class="actions"><button id="removeCancel">Cancel</button></div>
     </div>
   </div>
+  <div id="confirmDlg" hidden role="alertdialog" aria-modal="true" aria-labelledby="confirmQuestion">
+    <div class="box">
+      <p id="confirmQuestion"></p>
+      <p id="confirmDetail" hidden></p>
+      <div class="actions">
+        <button id="confirmCancel">Cancel</button>
+        <button id="confirmOk" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
+
   <div id="avDlg" hidden role="dialog" aria-modal="true" aria-labelledby="avTitle">
     <div class="box">
       <h2 id="avTitle">Antivirus</h2>
@@ -383,6 +408,35 @@
     const expanded = new Set();  // which rows are open (keys: 'p:<id>' / 'm:<id>')
 
     const $ = (s, r = document) => r.querySelector(s);
+
+    // A themed stand-in for the browser's own confirm(): same "question\n\ndetail" shape every
+    // call site already builds, resolved true/false. `danger` tints it for a destructive action.
+    function askConfirm(message, danger = false) {
+      return new Promise(resolve => {
+        const [question, ...rest] = message.split('\n\n');
+        const dlg = $('#confirmDlg');
+        dlg.classList.toggle('danger', danger);
+        $('#confirmQuestion').textContent = question;
+        const detail = rest.join('\n\n');
+        $('#confirmDetail').textContent = detail;
+        $('#confirmDetail').hidden = !detail;
+        dlg.hidden = false;
+        $('#confirmOk').focus();
+        const done = (answer) => {
+          dlg.hidden = true;
+          $('#confirmOk').onclick = null; $('#confirmCancel').onclick = null;
+          dlg.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKey);
+          resolve(answer);
+        };
+        const onBackdrop = (e) => { if (e.target === dlg) done(false); };
+        const onKey = (e) => { if (e.key === 'Escape') done(false); };
+        $('#confirmOk').onclick = () => done(true);
+        $('#confirmCancel').onclick = () => done(false);
+        dlg.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKey);
+      });
+    }
     const el = (tag, props = {}, kids = []) => {
       const n = Object.assign(document.createElement(tag), props);
       for (const k of [].concat(kids)) n.append(k);
@@ -604,7 +658,7 @@
         }
         if (m.mac) {
           grid.append(el('button', { type: 'button', textContent: 'Wake',
-            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: () => { if (confirm(`Wake "${m.label || m.hostname}" with Wake-on-LAN?`)) sendWake([m.machineId]); } }));
+            title: 'Wake-on-LAN: ' + m.mac + ' (sent by the waker machine)', onclick: async () => { if (await askConfirm(`Wake "${m.label || m.hostname}" with Wake-on-LAN?`)) sendWake([m.machineId]); } }));
         }
         if (m.lastScreenshotUtc) {
           grid.append(el('a', {
@@ -873,7 +927,7 @@
     }
     // Delete a program entirely (removes it from the manifest + repo; uninstalls fleet-wide).
     async function deleteProgram(p) {
-      if (!confirm(`Delete "${p.name}" (${p.id}) entirely?\n\nIt's removed from the manifest and uninstalled from every machine on its next sync. This can't be undone from here.`)) return;
+      if (!await askConfirm(`Delete "${p.name}" (${p.id}) entirely?\n\nIt's removed from the manifest and uninstalled from every machine on its next sync. This can't be undone from here.`, true)) return;
       try {
         const r = await fetch('/api/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id })
@@ -886,7 +940,7 @@
 
     // Request a screenshot capture from a machine (captured on its next sync).
     async function requestScreenshot(m) {
-      if (!confirm(`Take a screenshot of "${m.label || m.hostname}"?\n\nIt is captured on the machine's next sync.`)) return;
+      if (!await askConfirm(`Take a screenshot of "${m.label || m.hostname}"?\n\nIt is captured on the machine's next sync.`)) return;
       try {
         const r = await fetch('/api/screenshot', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
@@ -901,7 +955,7 @@
     // (it shows "waiting for the agent" until that machine's next sync picks the request up).
     async function startRemoteSession(m) {
       // Ask first, still inside the click: the confirm box is synchronous, so the window below still opens as part of the click.
-      if (!confirm(`Start a live remote session on "${m.label || m.hostname}"?\n\nYou will see and control its screen until the session ends or you press End session.`)) return;
+      if (!await askConfirm(`Start a live remote session on "${m.label || m.hostname}"?\n\nYou will see and control its screen until the session ends or you press End session.`)) return;
       // Open the viewer window NOW, inside the click. Setting up a session takes several seconds (it is
       // published through GitHub), and a browser only lets a click open a window for a few seconds
       // afterwards: opened after the wait, it is silently blocked and the operator sees nothing happen.
@@ -945,7 +999,7 @@
 
     async function signNow(unsigned) {
       const lines = unsigned.map(u => `• ${u.path}` + (u.lastChange ? ` (last changed by ${u.lastChange})` : '')).join('\n');
-      if (!confirm(`Sign these files exactly as they are on GitHub now?\n\n${lines}\n\nMachines will then act on them. ` +
+      if (!await askConfirm(`Sign these files exactly as they are on GitHub now?\n\n${lines}\n\nMachines will then act on them. ` +
                    `Only do this if you made (or checked) these changes yourself.`)) return;
       try {
         const r = await fetch('/api/sign', { method: 'POST' });
@@ -957,8 +1011,8 @@
 
     async function trustRelayKey(m) {
       const name = m.label || m.hostname;
-      if (!confirm(`${name} reports a NEW remote-control key.\n\nThat's normal if you reinstalled it. If you didn't, another machine may be ` +
-                   `trying to pose as it — don't trust the key; check that machine first.\n\nTrust the new key?`)) return;
+      if (!await askConfirm(`${name} reports a NEW remote-control key.\n\nThat's normal if you reinstalled it. If you didn't, another machine may be ` +
+                   `trying to pose as it — don't trust the key; check that machine first.\n\nTrust the new key?`, true)) return;
       try {
         const r = await fetch('/api/trust-relay-key', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId })
@@ -1010,7 +1064,7 @@
     // Send a power command (shutdown/restart) to a machine.
     async function sendCommand(m, action) {
       const verb = action === 'shutdown' ? 'Shut down' : 'Restart';
-      if (!confirm(`${verb} "${m.label || m.hostname}"?\n\nHappens on the machine's next sync (~1 cycle), after a 15-second warning on the machine.`)) return;
+      if (!await askConfirm(`${verb} "${m.label || m.hostname}"?\n\nHappens on the machine's next sync (~1 cycle), after a 15-second warning on the machine.`, true)) return;
       try {
         const r = await fetch('/api/command', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ machineId: m.machineId, action })
@@ -1023,7 +1077,7 @@
 
     // Fire a one-time "run now" for a program (pushes a fresh runRequest token).
     async function runNow(p) {
-      if (!confirm(`Run "${p.name}" now on all machines it's targeted at?`)) return;
+      if (!await askConfirm(`Run "${p.name}" now on all machines it's targeted at?`)) return;
       try {
         const r = await fetch('/api/runnow', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id })
@@ -1142,18 +1196,18 @@
     addEventListener('hashchange', () => showTab(location.hash.slice(1)));
     showTab(location.hash.slice(1) || (() => { try { return localStorage.getItem('orch.tab'); } catch { return null; } })() || 'machines');
 
-    $('#reload').onclick = () => {
-      if (dirty && !confirm('Discard unsaved changes and reload?')) return;
+    $('#reload').onclick = async () => {
+      if (dirty && !await askConfirm('Discard unsaved changes and reload?')) return;
       load();
     };
     $('#save').onclick = save;
     $('#actFilter').onchange = () => { activityLimit = 50; renderActivity(); };
     $('#actReload').onclick = () => loadActivity();
     $('#actMore').onclick = () => { activityLimit += 50; renderActivity(); };
-    $('#wakeAll').onclick = () => {
+    $('#wakeAll').onclick = async () => {
       const ids = (state?.machines || []).filter(m => m.mac).map(m => m.machineId);
       if (ids.length === 0) { toast('No machines with a known MAC', true); return; }
-      if (!confirm(`Wake all ${ids.length} machine(s) with a known MAC?`)) return;
+      if (!await askConfirm(`Wake all ${ids.length} machine(s) with a known MAC?`)) return;
       sendWake(ids);
     };
 
