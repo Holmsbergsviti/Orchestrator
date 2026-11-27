@@ -49,6 +49,7 @@ BeforeAll {
         SyncIntervalMinutes = 7
         IsWaker             = $true
         AutoUpdate          = $true
+        LanRelayEnabled     = $true
         RelayUrl            = "wss://10.0.0.5:5080"
         RelayCertThumbprint = "AAAABBBBCCCCDDDDEEEEFFFF0000111122223333"
     }
@@ -114,6 +115,26 @@ Describe "install.ps1 settings merge" {
                 $s.SyncIntervalMinutes | Should -Be 15
             } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
         }
+
+        It "lets you turn LanRelayEnabled off and keeps it off" {
+            $root = New-ExistingInstall $script:Installed
+            try {
+                $s = Invoke-Settings -Root $root -Extra @{ LanRelayEnabled = $false }
+                $s.LanRelayEnabled | Should -BeFalse
+            } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+
+        It "preserves LanRelayEnabled=false across a later run that doesn't mention it" {
+            # Same hazard class as AutoUpdate=false above: a machine opted out of the LAN relay
+            # trust model must not silently opt back in just because another setting changed.
+            $pinned = $script:Installed.Clone(); $pinned.LanRelayEnabled = $false
+            $root = New-ExistingInstall $pinned
+            try {
+                $s = Invoke-Settings -Root $root -Extra @{ IntervalMinutes = 15 }
+                $s.LanRelayEnabled | Should -BeFalse
+                $s.SyncIntervalMinutes | Should -Be 15
+            } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
     }
 
     Context "on a fresh machine" {
@@ -131,6 +152,7 @@ Describe "install.ps1 settings merge" {
             $s.Branch              | Should -Be $defaults.defaultBranch
             $s.SyncIntervalMinutes | Should -Be ([int]$defaults.defaultSyncIntervalMinutes)
             $s.AutoUpdate          | Should -BeTrue          # updates are on unless you opt out
+            $s.LanRelayEnabled     | Should -BeTrue          # LAN relay is on unless you opt out
             $s.RelayUrl            | Should -BeNullOrEmpty   # remote control off until configured
         }
     }

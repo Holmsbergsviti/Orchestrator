@@ -52,6 +52,27 @@ heartbeat/log/screenshot was sealed to a DIFFERENT data key than the one this co
 keys). It is dropped rather than shown as garbage; nothing is lost on GitHub, it's just unreadable
 until this console has the matching private key.
 
+## A machine is intermittently unreachable (heartbeat/log stop coming in, then resume on their own)
+Open the machine's **AV / Security** dialog (next to its other actions on the Machines tab) and
+check Windows Firewall's state per profile — a profile showing OFF when you expect it ON (or vice
+versa) is worth investigating first. Then check its **Log** link: every ~6 hours the agent re-logs
+its FULL installed-programs list (broader than the antivirus dialog — this also catches firewalls,
+VPN/proxy clients, parental-control suites and other software that never registers with Windows
+Security Center, which is often what's actually blocking outbound connections on a second-hand PC).
+Both are read-only diagnostics; neither changes anything on the machine.
+
+If a machine can't reach GitHub at all for several sync cycles in a row (`LanRelayFailureThreshold`,
+default 5), and `LanRelayEnabled` is on for both it and at least one other machine on the same
+physical network, it broadcasts a request for help on UDP port `lanRelayPort` (defaults.json,
+51900) and a reachable peer forwards its heartbeat to GitHub for it — you'll see "LAN relay:
+forwarded ... heartbeat ... on its behalf" in the HELPING machine's own log. This only ever
+relays the heartbeat itself (never logs or screenshots), is fire-and-forget (no confirmation it
+actually reached GitHub), and only works within one broadcast domain — same limit as
+Wake-on-LAN. It needs no setup: it's on by default for every machine unless you passed
+`-LanRelayEnabled $false` at install time. A machine with genuinely no network path at all
+(not even to other machines on its LAN) can't be reached by any of this — that needs physical
+access or a LAN-relay-capable neighbor.
+
 ## Console: "Your local copy of 'main' and GitHub have each moved on"
 Your clone has a commit that was never pushed, and GitHub has newer ones too (the auto-publish adds a
 commit to the control repo for every agent build). The console never merges for you. In a terminal in the

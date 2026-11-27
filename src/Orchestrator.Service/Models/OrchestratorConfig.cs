@@ -65,6 +65,24 @@ public sealed class OrchestratorConfig
     /// <summary>If true, this (always-on) machine sends Wake-on-LAN magic packets for wake requests.</summary>
     public bool IsWaker { get; set; } = false;   // set true on one always-on machine per network segment
 
+    /// <summary>If true, this machine both listens for OTHER machines' "I can't reach GitHub,
+    /// please relay my heartbeat" broadcasts on the local network, and — once it has failed to
+    /// reach GitHub itself for <see cref="LanRelayFailureThreshold"/> heartbeats in a row — sends
+    /// one of its own. LAN-trust only: see LanRelayProtocol.cs. Off turns off both roles on this
+    /// machine (it won't ask for help, and won't relay for others).</summary>
+    public bool LanRelayEnabled { get; set; } = true;
+
+    /// <summary>How many consecutive failed heartbeat attempts before this machine starts asking
+    /// the local network for help. Deliberately not 1: a single blip (the usual GitHub API
+    /// hiccup, see UploadLogTailAsync's own retry) shouldn't trigger a broadcast every machine on
+    /// the LAN has to evaluate — only a run of them, which looks like a real, sustained block.</summary>
+    public int LanRelayFailureThreshold { get; set; } = 5;
+
+    /// <summary>UDP port used for the LAN relay broadcast/listener. Fixed fleet-wide (from
+    /// defaults.json) rather than a per-machine setting — every agent has to agree on the same
+    /// port or they'd never find each other.</summary>
+    [JsonIgnore] public int LanRelayPort => OrchestratorDefaults.Instance.LanRelayPort;
+
     /// <summary>Keep the agent itself up to date from the build published in agent.json. Set false
     /// on a machine you want pinned to its current build (or while bisecting a bad release).</summary>
     public bool AutoUpdate { get; set; } = true;

@@ -154,6 +154,31 @@ nonce (`commands.json.remoteSessions`, same pattern as screenshots). Consequence
   because the session process (user session) and the service (session 0) would otherwise
   read-modify-write the same file and corrupt it.
 
+**Diagnosing a machine that drops offline intermittently (`SecurityInventory`, `LanRelayService`).**
+Heartbeats carry Windows Firewall's on/off state per profile (`FirewallProfiles`) alongside the
+existing antivirus list; separately, the agent re-logs its FULL installed-programs list (registry
+Uninstall keys, broader than Security Center — catches firewalls, VPN/proxy clients and other
+software that never registers as antivirus) every ~6 hours, so it's within reach of the log tail's
+400-line window whenever the next upload succeeds. Both exist because "what's blocking this PC"
+is usually NOT a registered antivirus product, especially on second-hand machines.
+- **LAN relay.** If a machine fails to reach GitHub for `LanRelayFailureThreshold` heartbeats in a
+  row (default 5), it UDP-broadcasts a `relay-request` on `lanRelayPort` (defaults.json, 51900,
+  fixed fleet-wide — not a per-machine setting) and serves its heartbeat bytes over a short-lived
+  TCP connection to whichever peer answers; that peer (`LanRelayListenerHost`, running for the
+  whole service lifetime, separate from `Worker`'s sync loop) writes them to
+  `state/<machineId>.json` on the peer's behalf, unchanged. Fire-and-forget: a pickup resets the
+  failure counter so it doesn't broadcast every single cycle once a peer is helping, but there's no
+  confirmation the write actually landed — if it silently didn't, the streak just builds back up.
+  One broadcast domain only, same limit as Wake-on-LAN.
+- **Deliberately LAN-trust only, with one hard boundary.** Unlike signed control files or
+  `RelayCipher` sessions, a relay request carries no per-machine authentication — anything on the
+  same network segment can send one, same trust model as the existing WakeSender broadcast. What
+  keeps that bounded: `LanRelayPayload.TryDecode` refuses any path that isn't EXACTLY
+  `state/<thatMachineId>.json`, so even a forged request can only ever result in a bogus heartbeat
+  for some machine id — never a write to `manifest.json`, `commands.json`, another machine's
+  screenshots, or anywhere else in the repo. `-LanRelayEnabled $false` at install time turns off
+  both roles (asking and answering) on one machine.
+
 **The agent updates itself (`SelfUpdateService`).** `.github/workflows/publish-agent.yml` builds
 on every push to `main`, force-pushes the exe to the `dist` branch (orphan commit — a 36 MB
 binary per push would bloat the repo), and writes `agent.json` to the **control** repo. Points

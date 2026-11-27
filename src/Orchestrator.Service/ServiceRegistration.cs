@@ -56,6 +56,8 @@ public static class ServiceRegistration
         builder.Services.AddSingleton<IControlFileVerifier, ControlFileVerifier>();
         builder.Services.AddSingleton<IFleetDataEncryption, FleetDataEncryption>();
         builder.Services.AddSingleton<ISelfUpdateService, SelfUpdateService>();
+        builder.Services.AddSingleton<ILanRelayService, LanRelayService>();
+        builder.Services.AddHostedService<LanRelayListenerHost>();   // listens for other machines' relay requests for this service's whole lifetime
     }
 
     /// <summary>Serilog: daily-rolling file under &lt;RootPath&gt;\logs plus console.</summary>
