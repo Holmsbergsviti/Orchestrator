@@ -51,10 +51,20 @@ public sealed class Worker : BackgroundService   // BackgroundService = a long-r
         while (!stoppingToken.IsCancellationRequested)  // keep looping until the service is asked to stop
         {
             // Trim this PC's own old logs at startup and then about every 6 hours (cheap: one directory listing).
+            // Re-log the installed-software inventory on the same cadence (not just at startup): the log
+            // upload only ever sends the TAIL of the current file, so if this only printed once at startup
+            // it could scroll out of that tail long before an intermittently-blocked machine next manages
+            // to upload it. Re-printing periodically keeps it within reach of the next successful upload.
             if (DateTime.UtcNow - lastLogCleanup >= TimeSpan.FromHours(6))
             {
                 lastLogCleanup = DateTime.UtcNow;
                 LogRetention.Prune(_config.LogsPath, _config.LogRetentionDays, _config.LogMaxTotalMegabytes * 1024L * 1024L, DateTime.UtcNow, _log);
+                if (OperatingSystem.IsWindows())
+                {
+                    var programs = SecurityInventory.GetInstalledPrograms();
+                    _log.LogInformation("Installed programs ({Count}), for diagnosing what else is on this PC: {Programs}",
+                        programs.Count, string.Join("; ", programs));
+                }
             }
 
             try

@@ -63,6 +63,12 @@ public sealed class Heartbeat
     [JsonPropertyName("antivirus")]
     public List<string> Antivirus { get; set; } = new();
 
+    /// <summary>Windows Firewall's on/off state per profile ("Domain: ON", "Private: OFF", ...). Read-only
+    /// diagnostic: helps tell whether the firewall itself is even a candidate for a machine that's
+    /// intermittently unreachable, without guessing. See <see cref="Orchestrator.Service.Services.SecurityInventory"/>.</summary>
+    [JsonPropertyName("firewallProfiles")]
+    public List<string> FirewallProfiles { get; set; } = new();
+
     [JsonPropertyName("macAddresses")]
     public List<string> MacAddresses { get; set; } = new();    // this machine's NIC MACs (for Wake-on-LAN)
 
@@ -91,6 +97,7 @@ public sealed class Heartbeat
             string.Join(',', AppliedProgramIds),
             string.Join(',', MacAddresses),
             string.Join(',', Antivirus),
+            string.Join(',', FirewallProfiles),
             RelayPublicKey ?? "",   // a new key must reach the console promptly, not hours later
             LastError ?? "");
 }

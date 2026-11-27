@@ -57,8 +57,15 @@ public sealed class FleetReporter : IFleetReporter
     private readonly IConfigService _configService;
     private readonly IRelayIdentity _relayIdentity;   // supplies the public key the console pins
     private readonly IFleetDataEncryption _dataEncryption;   // seals heartbeats/logs for the console only
+    private readonly ILanRelayService _lanRelay;      // fallback: ask the local network for help once GitHub is unreachable too many cycles in a row
     private readonly ILogger<FleetReporter> _log;
     private readonly OrchestratorConfig _config;
+
+    /// <summary>How many heartbeat attempts in a row have failed to reach GitHub. Reset to 0 on a
+    /// successful push, or once a LAN peer has picked up a relay attempt (see MaybeRelayAsync).
+    /// Instance state is fine here: FleetReporter is a singleton for the service's lifetime, same
+    /// as the in-memory counters FleetReporter's log-upload cadence already relies on.</summary>
+    private int _consecutiveFailures;
 
     public FleetReporter(
         IGitHubClient github,
@@ -66,10 +73,12 @@ public sealed class FleetReporter : IFleetReporter
         IConfigService configService,
         IRelayIdentity relayIdentity,
         IFleetDataEncryption dataEncryption,
+        ILanRelayService lanRelay,
         ILogger<FleetReporter> log)
     {
         _relayIdentity = relayIdentity;
         _dataEncryption = dataEncryption;
+        _lanRelay = lanRelay;
         _github = github;
         _manifests = manifests;
         _configService = configService;
@@ -80,6 +89,12 @@ public sealed class FleetReporter : IFleetReporter
     public async Task ReportAsync(SyncRecord record, CancellationToken ct = default)
     {
         if (!_config.ReportState) return;   // reporting disabled for this machine
+
+        // Set once we have an actual payload to push, so a failure can be relayed with exactly
+        // the bytes we tried to send — not reconstructed from scratch (and not attempted at all
+        // if we failed before even building them, e.g. while reading machine config).
+        string? pendingMachineId = null, pendingPath = null, pendingMessage = null;
+        byte[]? pendingBytes = null;
 
         try
         {
@@ -105,6 +120,7 @@ public sealed class FleetReporter : IFleetReporter
                 LastError = record.Errors.Count > 0 ? record.Errors[0] : null,
                 MacAddresses = GetMacAddresses(),
                 Antivirus = OperatingSystem.IsWindows() ? SecurityInventory.GetAntivirusNames() : new List<string>(),
+                FirewallProfiles = OperatingSystem.IsWindows() ? SecurityInventory.GetFirewallProfileState() : new List<string>(),
                 RelayPublicKey = _relayIdentity.PublicKey
             };
 
@@ -117,18 +133,21 @@ public sealed class FleetReporter : IFleetReporter
             }
 
             var branch = _config.FleetStateBranch;
+            var path = $"state/{machine.MachineId}.json";
+            var bytes = _dataEncryption.EncryptIfEnabled(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(current, JsonOpts)));
+            var message = $"heartbeat: {machine.Hostname} ({machine.MachineId}) {current.LastSeenUtc}";
+            // From here on we have a real payload, so a failure below is relay-able.
+            pendingMachineId = machine.MachineId; pendingPath = path; pendingMessage = message; pendingBytes = bytes;
+
             if (!await _github.EnsureBranchAsync(branch, _config.Branch, ct))   // make sure fleet-state exists
             {
                 _log.LogWarning("Could not ensure branch '{Branch}'; skipping heartbeat", branch);
                 return;
             }
 
-            var path = $"state/{machine.MachineId}.json";
-            var bytes = _dataEncryption.EncryptIfEnabled(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(current, JsonOpts)));
             var sha = await _github.GetFileShaAsync(path, branch, ct);   // null on first push -> create; otherwise update
-            var message = $"heartbeat: {machine.Hostname} ({machine.MachineId}) {current.LastSeenUtc}";
-
             await _github.PutFileAsync(path, bytes, branch, message, sha, ct);
+            _consecutiveFailures = 0;   // reached GitHub fine this time
             SaveLastHeartbeat(current);   // remember what we pushed so next cycle can diff
             _log.LogInformation("Reported heartbeat to {Branch}:{Path}", branch, path);
 
@@ -145,6 +164,33 @@ public sealed class FleetReporter : IFleetReporter
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Heartbeat reporting failed (continuing)");   // best-effort — never break the sync
+            await MaybeRelayAsync(pendingMachineId, pendingPath, pendingMessage, pendingBytes, ct);
+        }
+    }
+
+    /// <summary>Called after a heartbeat push failed: counts the failure, and once
+    /// <see cref="OrchestratorConfig.LanRelayFailureThreshold"/> in a row have failed, asks the
+    /// local network to carry this one instead. Does nothing (not even counting) if we failed
+    /// before building an actual payload — there's nothing to relay yet. Never throws.</summary>
+    private async Task MaybeRelayAsync(string? machineId, string? path, string? message, byte[]? bytes, CancellationToken ct)
+    {
+        if (machineId is null || path is null || message is null || bytes is null) return;
+
+        _consecutiveFailures++;
+        if (_consecutiveFailures < _config.LanRelayFailureThreshold) return;
+
+        try
+        {
+            var relayed = await _lanRelay.TryRelayAsync(machineId, path, message, bytes, TimeSpan.FromSeconds(5), ct);
+            // Reset on a pickup, not proof it reached GitHub (relaying is fire-and-forget) — this
+            // just avoids broadcasting every single cycle once a peer has started helping; if that
+            // particular relay silently didn't land, the streak simply builds back up and we try again.
+            if (relayed) _consecutiveFailures = 0;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "LAN relay attempt itself failed (continuing)");
         }
     }
 

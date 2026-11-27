@@ -12,6 +12,7 @@
   "defaultSyncIntervalMinutes": 3,
   "fleetStateBranch": "fleet-state",
   "heartbeatMaxIntervalMinutes": 30,
+  "lanRelayPort": 51900,
   "codeRepo": "Holmsbergsviti/Orchestrator",
   "codeRef": "main"
 }

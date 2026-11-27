@@ -71,9 +71,14 @@ The tab you were on is remembered across reloads, and a link such as `http://loc
 - **Machines** — every machine that has reported, with an online/offline dot, OS, agent
   version, last-seen, how many programs it's running, and last sync status. Type a **label**
   to give a machine a friendly name (stored in `fleet.json`).
-  When Windows Security Center reports any antivirus on a PC, an **AV (N)** button appears next to its
-  other actions; it opens a read-only list, with anything other than Windows' own Defender highlighted —
-  handy on second-hand PCs that still carry the previous owner's antivirus. Older agents don't report it.
+  When a PC reports any antivirus or its Windows Firewall state, an **AV (N)** (or **Security**, if
+  there's no antivirus to count) button appears next to its other actions; it opens a read-only
+  dialog with both — antivirus other than Windows' own Defender is highlighted, handy on
+  second-hand PCs that still carry the previous owner's antivirus, and the button itself turns
+  yellow if any firewall profile is off. The dialog also links to the machine's **Log**, where its
+  full installed-programs list (refreshed roughly every 6 hours, broader than antivirus-only —
+  catches firewalls, VPN/proxy clients and other software that never registers as antivirus) can be
+  found when diagnosing a machine that's intermittently unreachable. Older agents don't report any of this.
 - **Targeting** — a grid of programs (rows) × machines (columns). Tick a box to run that
   program on that machine. The **All** toggle per program means "every machine, including
   ones that report in later" (it clears the program's `target`); turn it off to pick an

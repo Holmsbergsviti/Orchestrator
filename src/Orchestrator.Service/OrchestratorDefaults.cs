@@ -36,6 +36,7 @@ public sealed class OrchestratorDefaults
     [JsonPropertyName("defaultSyncIntervalMinutes")] public int DefaultSyncIntervalMinutes { get; set; } = 60;         // default minutes between syncs
     [JsonPropertyName("fleetStateBranch")]   public string FleetStateBranch { get; set; } = "fleet-state";           // branch heartbeats are committed to
     [JsonPropertyName("heartbeatMaxIntervalMinutes")] public int HeartbeatMaxIntervalMinutes { get; set; } = 30;     // force a heartbeat at least this often
+    [JsonPropertyName("lanRelayPort")]       public int LanRelayPort { get; set; } = 51900;                          // UDP port the LAN relay broadcast/listener uses — fixed fleet-wide so peers can find each other
     [JsonPropertyName("codeRepo")]           public string CodeRepo { get; set; } = "Holmsbergsviti/Orchestrator";     // repo hosting the exe + scripts
     [JsonPropertyName("codeRef")]            public string CodeRef { get; set; } = "main";                             // branch of that code repo
 

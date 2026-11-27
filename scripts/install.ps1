@@ -30,6 +30,10 @@
                         leave remote control unavailable on this machine.
 .PARAMETER RelayCertThumbprint  The console's HTTPS certificate thumbprint (it prints this too).
                         Required only when that certificate is self-signed.
+.PARAMETER LanRelayEnabled  Let this machine ask others on the same local network to forward its
+                        heartbeat when it can't reach GitHub itself for several cycles in a row,
+                        and relay for others when it can reach GitHub. Default true; set to $false
+                        on a machine where that trust model is unwanted.
 
 .NOTES
     Settings you don't pass are PRESERVED from the existing appsettings.json, so only a first
@@ -66,6 +70,7 @@ param(
     [string]$RelayUrl = "",                                     # console relay address for live remote control (blank = feature off here)
     [string]$RelayCertThumbprint = "",                          # console's cert thumbprint; only needed if it's self-signed
     [bool]$AutoUpdate = $true,                                  # keep the agent's own binary current from agent.json
+    [bool]$LanRelayEnabled = $true,                             # let this machine ask/answer LAN relay requests (off = neither role)
     # Resolve the settings, print them as JSON, and stop -- touching nothing. Exists so the
     # merge logic (which is subtle, and the source of a real outage once) can be tested in CI
     # against the REAL code path, rather than a copy of it that could drift.
@@ -133,6 +138,7 @@ $RelayUrl            = if ($given.ContainsKey('RelayUrl'))            { $RelayUr
 $RelayCertThumbprint = if ($given.ContainsKey('RelayCertThumbprint')) { $RelayCertThumbprint } elseif ($old -and $old.RelayCertThumbprint) { $old.RelayCertThumbprint } else { "" }
 $IsWakerValue        = if ($given.ContainsKey('IsWaker'))             { [bool]$IsWaker }       elseif ($old)                               { [bool]$old.IsWaker }       else { $false }
 $AutoUpdateValue     = if ($given.ContainsKey('AutoUpdate'))          { [bool]$AutoUpdate }    elseif ($old -and $null -ne $old.AutoUpdate) { [bool]$old.AutoUpdate }   else { $true }
+$LanRelayValue       = if ($given.ContainsKey('LanRelayEnabled'))     { [bool]$LanRelayEnabled } elseif ($old -and $null -ne $old.LanRelayEnabled) { [bool]$old.LanRelayEnabled } else { $true }
 
 if (-not $RepoOwner -or -not $RepoName) {
     throw "No existing install found at '$InstallRoot', so -RepoOwner and -RepoName are required for a first install."
@@ -149,6 +155,7 @@ if ($ShowSettings) {
         SyncIntervalMinutes = $IntervalMinutes
         IsWaker             = $IsWakerValue
         AutoUpdate          = $AutoUpdateValue
+        LanRelayEnabled     = $LanRelayValue
         RelayUrl            = $RelayUrl
         RelayCertThumbprint = $RelayCertThumbprint
     } | ConvertTo-Json -Depth 5
@@ -220,6 +227,7 @@ $config = [ordered]@{
         RegistryEntryPrefix = $D.registryEntryPrefix  # prefix so our startup entries are easy to spot/clean up (from defaults.json)
         IsWaker             = $IsWakerValue        # true = this machine sends Wake-on-LAN packets for the fleet
         AutoUpdate          = $AutoUpdateValue     # true = install the agent build published in the control repo's agent.json
+        LanRelayEnabled     = $LanRelayValue       # true = ask the local network for help when GitHub is unreachable, and relay for others who ask
         # Live remote control. This file is rewritten from scratch on every install, so anything
         # missing here is silently reset to its built-in default — which is exactly how a
         # hand-edited RelayUrl would disappear on the next upgrade. Pass it as a parameter instead.

@@ -47,6 +47,15 @@ public sealed class HeartbeatTests
             SecurityInventory.Normalize(new[] { "Windows Defender", "Avast", " avast ", "", "windows defender" }));
 
     [Fact]
+    public void Signature_ChangesWhenFirewallProfilesChange()
+    {
+        var a = Sample("2026-01-01T00:00:00Z");
+        var b = Sample("2026-01-01T00:00:00Z");
+        b.FirewallProfiles = new List<string> { "Domain: OFF" };
+        Assert.NotEqual(a.Signature, b.Signature);   // a firewall turning off must reach the console promptly
+    }
+
+    [Fact]
     public void Signature_ChangesWithHeartbeatCadence()
     {
         var a = Sample("2026-07-24T10:00:00Z", "p1");
